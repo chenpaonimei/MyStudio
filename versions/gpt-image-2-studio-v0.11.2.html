@@ -1,0 +1,3652 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GPT-Image-2 工作台 · APIMart</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:9999px; font-size:11px; font-weight:600; }
+  .badge-pending { background:#f1f5f9; color:#475569; }
+  .badge-submitted { background:#dbeafe; color:#1d4ed8; }
+  .badge-processing { background:#fef3c7; color:#b45309; }
+  .badge-completed { background:#dcfce7; color:#166534; }
+  .badge-failed { background:#fee2e2; color:#b91c1c; }
+  .badge-retrying { background:#ede9fe; color:#6d28d9; }
+  .badge-cancelled { background:#f1f5f9; color:#475569; }
+  details > summary { list-style: none; cursor:pointer; }
+  details > summary::-webkit-details-marker { display:none; }
+  .ref-thumb { transition: transform .15s ease; }
+  .ref-thumb:hover { transform: scale(1.04); }
+  .progress-bar { height: 4px; background:#e2e8f0; border-radius:2px; overflow:hidden; }
+  .progress-bar > div { height:100%; background:linear-gradient(90deg,#3b82f6,#6366f1); transition:width .4s ease; }
+  .toast { animation: slideIn .25s ease; }
+  @keyframes slideIn { from { transform: translateY(-8px); opacity:0; } to { transform:translateY(0); opacity:1; } }
+  .img-grid img { background:#f8fafc; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<!-- ============== Toasts ============== -->
+<div id="toasts" class="fixed top-4 right-4 z-50 flex flex-col gap-2 w-80"></div>
+
+<div class="max-w-7xl mx-auto p-4 sm:p-6">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between mb-4">
+    <div class="flex items-center gap-2">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold">G</div>
+      <div>
+        <h1 class="text-lg font-semibold leading-tight">GPT-Image-2 工作台</h1>
+        <p class="text-xs text-slate-500">APIMart · 纯前端单页 · 数据只在你本地</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="apiKeyStatus" class="text-xs text-slate-500"></span>
+      <span id="balanceDisplay" class="flex items-center gap-1"></span>
+      <button id="btnSettings" class="px-3 py-1.5 text-sm rounded-lg border border-slate-300 hover:bg-white">⚙️ 设置</button>
+    </div>
+  </header>
+
+  <!-- Settings panel -->
+  <section id="settingsPanel" class="hidden bg-white border border-slate-200 rounded-xl p-4 mb-4">
+    <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+      <div class="md:col-span-6">
+        <label class="block text-xs text-slate-500 mb-1">API Key (Bearer Token)</label>
+        <div class="flex gap-2">
+          <input id="apiKey" type="password" placeholder="sk-..." class="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm" autocomplete="off" />
+          <button id="btnToggleKey" class="px-3 py-2 text-sm rounded-lg border border-slate-300">👁</button>
+        </div>
+        <p class="text-[11px] text-slate-400 mt-1">仅保存在本机浏览器 localStorage，不会上传任何服务器。</p>
+      </div>
+      <div class="md:col-span-4">
+        <label class="block text-xs text-slate-500 mb-1">Base URL</label>
+        <input id="baseUrl" value="https://api.apimart.ai/v1" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+        <p class="text-[11px] text-slate-400 mt-1">默认官方网关。CORS 报错可换代理。</p>
+      </div>
+      <div class="md:col-span-2">
+        <label class="block text-xs text-slate-500 mb-1">并发上限</label>
+        <input id="concurrency" type="number" min="1" max="20" value="3" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+      </div>
+    </div>
+
+    <!-- Auto retry config -->
+    <div class="mt-4 pt-3 border-t border-slate-100">
+      <h3 class="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-2">
+        🔁 失败自动重试
+        <span class="text-[10px] font-normal text-slate-400">（重试也受上面的「并发上限」约束）</span>
+      </h3>
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+        <div class="md:col-span-3">
+          <label class="block text-xs text-slate-500 mb-1">模式</label>
+          <select id="retryMode" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="off">关闭（仅手动重试）</option>
+            <option value="count">按次数</option>
+            <option value="duration">按时长</option>
+            <option value="forever">直到成功</option>
+          </select>
+        </div>
+        <div class="md:col-span-2" id="retryCountWrap">
+          <label class="block text-xs text-slate-500 mb-1">最多次数</label>
+          <input id="retryCount" type="number" min="1" max="100" value="3" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+        </div>
+        <div class="md:col-span-2 hidden" id="retryDurationWrap">
+          <label class="block text-xs text-slate-500 mb-1">总时长 (分)</label>
+          <input id="retryDuration" type="number" min="1" max="1440" value="10" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">间隔 (秒)</label>
+          <input id="retryInterval" type="number" min="1" max="600" value="5" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+        </div>
+        <div class="md:col-span-3 flex items-end pb-1">
+          <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+            <input id="retrySkip4xx" type="checkbox" checked class="w-3.5 h-3.5" />
+            跳过参数错误（4xx，但 429 仍重试）
+          </label>
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-1">
+        所有失败类型都会按所选模式重试，包括内容审核 / safety / moderation —— 实测多试几次往往能过。<br />
+        若确认是 prompt 问题，可在任务卡上点「停止」或直接关闭自动重试。
+      </p>
+    </div>
+
+    <!-- 价格表（可折叠） -->
+    <details class="mt-4 pt-3 border-t border-slate-100">
+      <summary class="text-xs font-semibold text-slate-700 cursor-pointer hover:text-slate-900 select-none flex items-center gap-2">
+        💰 价格表（参考价 vs 实测均值）
+        <span class="text-[10px] font-normal text-slate-400">每次任务完成都会自动更新实测列</span>
+      </summary>
+      <div id="priceTable" class="mt-2 max-h-72 overflow-auto rounded-lg border border-slate-200 p-1"></div>
+      <div class="mt-2 flex justify-end gap-2">
+        <button id="btnResetPrices" class="text-[11px] px-2 py-1 text-slate-500 hover:text-red-600">重置实测均值</button>
+      </div>
+    </details>
+
+    <div class="mt-3 flex justify-end gap-2">
+      <button id="btnClearKey" class="text-xs px-2 py-1 text-slate-500 hover:text-red-600">清除已保存的 Key</button>
+    </div>
+  </section>
+
+  <!-- Tab nav -->
+  <nav class="flex border-b border-slate-200 mb-4 -mt-1">
+    <button data-tab="generate" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-blue-600 text-blue-700">🚀 图像生成</button>
+    <button data-tab="mask" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">🎨 Mask 编辑器</button>
+  </nav>
+
+  <!-- ============================================================
+       View: Generate
+       ============================================================ -->
+  <div id="viewGenerate">
+  <!-- Main grid: form + tasks -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+    <!-- ============== Generation form ============== -->
+    <section class="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-4 h-fit lg:sticky lg:top-4">
+      <h2 class="font-semibold mb-3">新建生成任务</h2>
+
+      <!-- Model -->
+      <div class="mb-3">
+        <label class="block text-xs text-slate-500 mb-1">模型</label>
+        <div class="grid grid-cols-2 gap-2" id="modelRow">
+          <button type="button" data-model="gpt-image-2" class="model-btn px-3 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">gpt-image-2</button>
+          <button type="button" data-model="gpt-image-2-official" class="model-btn px-3 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">gpt-image-2-official</button>
+        </div>
+        <p id="modelHint" class="text-[11px] text-slate-400 mt-1"></p>
+      </div>
+
+      <!-- Prompt -->
+      <div class="mb-3">
+        <label class="flex items-center justify-between text-xs text-slate-500 mb-1">
+          <span>提示词 Prompt</span>
+          <span id="promptCount" class="text-[11px] text-slate-400">0</span>
+        </label>
+        <textarea id="prompt" rows="4" placeholder="例如：一只橘猫坐在窗台上看夕阳，水彩画风格" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm resize-y"></textarea>
+      </div>
+
+      <!-- Size + Resolution -->
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">比例 size</label>
+          <select id="size" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white"></select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">分辨率 resolution</label>
+          <select id="resolution" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="1k">1K</option>
+            <option value="2k">2K</option>
+            <option value="4k">4K</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Specific pixels -->
+      <div class="mb-3">
+        <label class="block text-xs text-slate-500 mb-1">具体像素</label>
+        <select id="pixelMode" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white"></select>
+        <div id="customPixelWrap" class="hidden mt-2 flex items-center gap-2">
+          <input id="customW" type="number" min="64" max="4096" placeholder="宽 px" class="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          <span class="text-slate-400 text-sm">×</span>
+          <input id="customH" type="number" min="64" max="4096" placeholder="高 px" class="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+        </div>
+        <div class="text-[11px] text-slate-500 mt-1 flex items-center justify-between gap-2">
+          <span>将发送 size = <span id="actualSizeHint" class="font-mono text-slate-700">—</span></span>
+          <span id="pixelMpHint" class="text-slate-400 font-mono"></span>
+        </div>
+      </div>
+
+      <!-- Official-only -->
+      <div id="officialFields" class="hidden grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">质量 quality</label>
+          <select id="quality" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="auto">auto</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">背景 background</label>
+          <select id="background" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="auto">auto</option>
+            <option value="opaque">opaque</option>
+            <option value="transparent">transparent</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">输出格式</label>
+          <select id="outputFormat" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="">默认 (png)</option>
+            <option value="png">png</option>
+            <option value="jpeg">jpeg</option>
+            <option value="webp">webp</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">压缩 0-100</label>
+          <input id="outputCompression" type="number" min="0" max="100" placeholder="仅 jpeg/webp" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">审核 moderation</label>
+          <select id="moderation" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="auto">auto</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Mask 局部重绘遮罩 <span class="text-slate-400 font-normal">(可选)</span></label>
+          <div class="flex gap-2">
+            <input id="maskUrl" type="text" placeholder="粘贴公网 URL，或点击右侧上传本地文件" class="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+            <button id="btnUploadMask" type="button" class="px-3 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50 whitespace-nowrap">📁 上传</button>
+            <input id="maskFileInput" type="file" accept="image/*" class="hidden" />
+            <button id="btnClearMask" type="button" class="px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">清</button>
+          </div>
+          <div id="maskPreview" class="hidden mt-2 flex items-center gap-2 p-2 bg-slate-50 rounded border border-slate-200">
+            <img id="maskThumb" class="w-14 h-14 object-cover rounded border border-slate-200 bg-white" alt="mask preview" />
+            <div class="text-[11px] flex-1 min-w-0">
+              <div id="maskName" class="font-medium text-slate-700 truncate"></div>
+              <div id="maskMeta" class="text-slate-500"></div>
+            </div>
+          </div>
+          <details class="text-[11px] text-slate-500 mt-2">
+            <summary class="cursor-pointer hover:text-slate-700 select-none">📖 mask 局部重绘使用说明</summary>
+            <div class="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-amber-900 leading-relaxed space-y-1">
+              <div><b>1. 仅 gpt-image-2-official 支持。</b>中转通道传 mask_url 会被忽略。</div>
+              <div><b>2. 必须搭配参考图。</b>请先在上方"参考图"区上传至少 1 张图，mask 单独传无效。</div>
+              <div><b>3. mask 尺寸 = 第 1 张参考图尺寸。</b>不一致会被官方拒绝。</div>
+              <div><b>4. mask 是带 Alpha 通道的 PNG。</b>透明区域 = 要重绘的部分，不透明 = 保留原图。</div>
+              <div><b>5. prompt 写"重绘后想要的效果"。</b>例：把背景换成沙漠日落 / 让人物穿红色西装。</div>
+              <div><b>6. 本地上传以 base64 嵌入。</b>若官方通道返回 "mask_url must be a URL" 之类错误，请改用 <code class="bg-amber-100 px-1 rounded">POST /v1/uploads/images</code> 拿到 URL 再粘贴。</div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- n, batch, fallback -->
+      <div class="grid grid-cols-3 gap-3 mb-3">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">每任务张数 n</label>
+          <input id="n" type="number" min="1" max="4" value="1" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          <p class="text-[11px] text-slate-400 mt-0.5" id="nHint">普通通道仅 1</p>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">提交几次</label>
+          <input id="batchCount" type="number" min="1" max="50" value="1" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          <p class="text-[11px] text-slate-400 mt-0.5">同 prompt 重复提交</p>
+        </div>
+        <div id="fallbackWrap">
+          <label class="block text-xs text-slate-500 mb-1">官方兜底</label>
+          <select id="officialFallback" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="false">false</option>
+            <option value="true">true</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Reference images -->
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs text-slate-500">参考图 (最多 16 张)</label>
+          <span id="refCount" class="text-[11px] text-slate-400">0 / 16</span>
+        </div>
+        <div id="dropZone" class="border-2 border-dashed border-slate-300 rounded-lg p-3 text-center text-xs text-slate-500 hover:bg-slate-50 cursor-pointer">
+          拖拽图片到这里，或<span class="text-blue-600 underline ml-1">点击选择文件</span>
+          <input id="fileInput" type="file" accept="image/*" multiple class="hidden" />
+        </div>
+        <div class="flex gap-2 mt-2">
+          <input id="urlInput" type="url" placeholder="粘贴图片 URL，按回车添加" class="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-xs" />
+          <button id="btnAddUrl" class="px-3 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">添加</button>
+        </div>
+        <div id="refList" class="mt-2 grid grid-cols-4 sm:grid-cols-5 gap-2"></div>
+      </div>
+
+      <!-- Cost estimate -->
+      <div id="costEstimate" class="text-xs px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 mb-2"></div>
+
+      <!-- Submit -->
+      <div class="flex gap-2 pt-2 border-t border-slate-100">
+        <button id="btnSubmit" class="flex-1 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:bg-slate-300">🚀 提交生成</button>
+        <button id="btnReset" type="button" class="px-3 py-2.5 rounded-lg border border-slate-300 text-sm hover:bg-slate-50">重置</button>
+      </div>
+      <p id="formError" class="text-xs text-red-600 mt-2 hidden"></p>
+    </section>
+
+    <!-- ============== Tasks list (右侧独立滚动) ============== -->
+    <section class="lg:col-span-7 lg:max-h-[calc(100vh-8rem)] lg:flex lg:flex-col">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div class="flex items-baseline gap-3">
+          <h2 class="font-semibold">任务队列</h2>
+          <span id="queueStat" class="text-xs text-slate-500"></span>
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          <button id="btnExpandAll" class="px-2 py-1.5 text-xs rounded-lg border border-slate-300 hover:bg-white" title="展开全部">▼ 展开</button>
+          <button id="btnCollapseAll" class="px-2 py-1.5 text-xs rounded-lg border border-slate-300 hover:bg-white" title="折叠全部">▲ 折叠</button>
+          <button id="btnDownloadSelected" class="px-3 py-1.5 text-sm rounded-lg border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed" title="只下载已勾选的图片" disabled>⬇️ 下载选中 (<span id="selectedCount">0</span>)</button>
+          <button id="btnDownloadAll" class="px-3 py-1.5 text-sm rounded-lg border border-slate-300 hover:bg-white">⬇️ 下载全部</button>
+          <button id="btnClearSelection" class="px-2 py-1.5 text-xs rounded-lg border border-slate-300 hover:bg-white hidden" title="取消所有选中">×</button>
+          <button id="btnClearDone" class="px-3 py-1.5 text-sm rounded-lg border border-slate-300 hover:bg-white">清除已完成</button>
+          <button id="btnClearAll" class="px-3 py-1.5 text-sm rounded-lg border border-slate-300 hover:bg-white text-red-600">清空</button>
+        </div>
+      </div>
+      <div id="tasksScrollArea" class="lg:flex-1 lg:overflow-y-auto lg:pr-1 scrollbar-thin">
+        <div id="tasksList" class="space-y-3"></div>
+        <div id="tasksEmpty" class="text-center text-sm text-slate-400 py-12">还没有任务，先在左侧提交一个吧 👈</div>
+      </div>
+    </section>
+
+  </div>
+  </div><!-- /viewGenerate -->
+
+  <!-- ============================================================
+       View: Mask Editor
+       ============================================================ -->
+  <div id="viewMask" class="hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+      <!-- Mask Tools -->
+      <aside class="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-4 h-fit lg:sticky lg:top-4">
+        <h2 class="font-semibold mb-3">🎨 Mask 工具</h2>
+
+        <!-- 图源 -->
+        <div class="mb-3">
+          <label class="block text-xs text-slate-500 mb-1">参考图来源</label>
+          <button id="btnMaskUploadImg" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">📁 上传图片</button>
+          <input id="maskEditorImgInput" type="file" accept="image/*" class="hidden" />
+          <button id="btnMaskUseRefImage" class="w-full mt-2 px-3 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50 hidden">使用主页第 1 张参考图</button>
+          <button id="btnMaskClearImage" class="w-full mt-2 px-3 py-2 text-sm rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 hidden">🗑 清除参考图</button>
+          <p class="text-[11px] text-slate-400 mt-1.5">也可以把图片直接拖到右侧画布</p>
+        </div>
+
+        <!-- 快速选区（v0.11.0 智能化第一步：纯前端 MediaPipe） -->
+        <div id="maskQuickPanel" class="mb-3 hidden">
+          <label class="block text-xs text-slate-500 mb-1 flex items-center justify-between">
+            <span>✨ 快速选区</span>
+            <span id="maskAIStatus" class="text-[10px] text-slate-400 font-mono">未加载</span>
+          </label>
+          <div class="grid grid-cols-2 gap-1">
+            <button data-quick="person"     class="mask-quick px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-blue-50">👤 人物</button>
+            <button data-quick="background" class="mask-quick px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-blue-50">🌄 背景</button>
+            <button data-quick="head"       class="mask-quick px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-blue-50">🙂 头部</button>
+            <button data-quick="hands"      class="mask-quick px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-blue-50">✋ 双手</button>
+            <button data-quick="feet"       class="mask-quick px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-blue-50 col-span-2">🦶 双脚（粗略，需精修）</button>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-1">首次点击会下载约 5–15 MB 模型，之后秒开。AI 结果会合并到现有遮罩，可撤销。</p>
+        </div>
+
+        <!-- 工具 -->
+        <div class="mb-3">
+          <label class="block text-xs text-slate-500 mb-1">工具 (快捷键 B / E)</label>
+          <div class="grid grid-cols-2 gap-1">
+            <button data-tool="brush"  class="mask-tool px-2 py-2 text-sm rounded-lg border border-slate-300 bg-blue-50 text-blue-700 border-blue-300">🖌 涂抹</button>
+            <button data-tool="eraser" class="mask-tool px-2 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">🧽 擦除</button>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-1">涂抹 = 这块要重绘（导出后为透明区）</p>
+        </div>
+
+        <!-- 笔刷大小 -->
+        <div class="mb-3">
+          <label class="flex items-center justify-between text-xs text-slate-500 mb-1">
+            <span>笔刷大小</span>
+            <span id="brushSizeLabel" class="font-mono">50 px</span>
+          </label>
+          <input id="brushSize" type="range" min="2" max="400" value="50" class="w-full" />
+          <p class="text-[11px] text-slate-400">快捷键 [ ] 缩小放大</p>
+        </div>
+
+        <!-- 硬度 -->
+        <div class="mb-3">
+          <label class="flex items-center justify-between text-xs text-slate-500 mb-1">
+            <span>笔刷硬度</span>
+            <span id="brushHardnessLabel" class="font-mono">100%</span>
+          </label>
+          <input id="brushHardness" type="range" min="10" max="100" value="100" class="w-full" />
+        </div>
+
+        <!-- Overlay 可见度 -->
+        <div class="mb-3">
+          <label class="flex items-center justify-between text-xs text-slate-500 mb-1">
+            <span>遮罩预览强度</span>
+            <span id="overlayAlphaLabel" class="font-mono">50%</span>
+          </label>
+          <input id="overlayAlpha" type="range" min="10" max="100" value="50" class="w-full" />
+        </div>
+
+        <!-- 操作 -->
+        <div class="grid grid-cols-2 gap-1 mb-3">
+          <button id="btnMaskUndo"  class="px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">↶ 撤销</button>
+          <button id="btnMaskRedo"  class="px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">↷ 重做</button>
+          <button id="btnMaskClear" class="col-span-2 px-3 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">🧹 清空遮罩</button>
+          <button id="btnMaskInvert" class="col-span-2 px-3 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">⇔ 反转</button>
+          <button id="btnMaskFill" class="col-span-2 px-3 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50">▣ 全部涂抹</button>
+        </div>
+
+        <!-- 保存 -->
+        <div class="pt-3 border-t border-slate-100 space-y-2">
+          <button id="btnMaskUseInForm" class="w-full px-3 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300">💾 用作此次生成的 mask</button>
+          <button id="btnMaskExport" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">💿 导出 PNG</button>
+        </div>
+
+        <!-- 说明 -->
+        <details class="text-[11px] text-slate-500 mt-3">
+          <summary class="cursor-pointer hover:text-slate-700 select-none">📖 mask 接口契约</summary>
+          <div class="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-amber-900 leading-relaxed space-y-1">
+            <div><b>1.</b> 仅 <code>gpt-image-2-official</code> 支持。</div>
+            <div><b>2.</b> mask 尺寸 = 第 1 张参考图尺寸（编辑器自动保证一致）。</div>
+            <div><b>3.</b> 导出 PNG 带 alpha 通道：你涂红的地方 = 透明 = 要重绘；未涂区 = 白色不透明 = 保留原图。</div>
+            <div><b>4.</b> 「用作此次生成」自动写入主页面 mask 字段，并把当前图作为第 1 张参考图（若空）。</div>
+          </div>
+        </details>
+      </aside>
+
+      <!-- Canvas -->
+      <div class="lg:col-span-9 bg-white border border-slate-200 rounded-xl p-3 lg:max-h-[calc(100vh-8rem)] lg:flex lg:flex-col">
+        <div id="maskCanvasInfo" class="text-[11px] text-slate-500 mb-2 flex items-center justify-between gap-2 flex-wrap">
+          <span>请先选择或上传一张参考图</span>
+          <span id="maskHistoryInfo" class="font-mono text-slate-400"></span>
+        </div>
+        <div class="relative lg:flex-1 flex flex-col min-h-[200px]">
+          <div id="maskCanvasWrap" class="relative bg-slate-100 rounded overflow-auto scrollbar-thin flex-1 min-h-0" style="touch-action: none;">
+            <div id="maskCanvasEmpty" class="text-center py-20 px-6 text-slate-400 text-sm">
+              <div class="text-3xl mb-2 opacity-60">🖼️</div>
+              <div>把图片拖到这里，或在左侧点「📁 上传图片」</div>
+              <div class="text-[11px] text-slate-400 mt-1">也可使用主页面已有的参考图</div>
+            </div>
+            <div id="maskCanvasStack" class="hidden relative mx-auto" style="line-height:0;">
+              <canvas id="maskImgCanvas" class="block"></canvas>
+              <canvas id="maskOverlayCanvas" class="block absolute top-0 left-0" style="cursor: crosshair;"></canvas>
+              <canvas id="maskCursorCanvas" class="block absolute top-0 left-0 pointer-events-none"></canvas>
+            </div>
+            <!-- 拖拽 drop overlay：蒙层 + 虚线框 + 提示 -->
+            <div id="maskDropOverlay" class="hidden absolute inset-0 z-20 pointer-events-none flex items-center justify-center bg-blue-50/80 backdrop-blur-[2px]">
+              <div class="border-2 border-dashed border-blue-500 rounded-lg w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] flex flex-col items-center justify-center text-blue-700">
+                <div class="text-4xl mb-2">⬇️</div>
+                <div class="text-sm font-medium">松开以载入图片</div>
+                <div class="text-[11px] text-blue-500 mt-1">将替换当前画布内容</div>
+              </div>
+            </div>
+          </div>
+          <!-- 浮动缩放工具栏（绝对定位在 wrap 之外，不随内容滚动） -->
+          <div id="maskZoomToolbar" class="hidden absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 bg-white/95 backdrop-blur border border-slate-300 rounded-full px-1.5 py-1 shadow-lg text-xs select-none">
+            <button id="btnZoomOut" type="button" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-slate-100 disabled:opacity-40" title="缩小 (Ctrl/⌘+-)">−</button>
+            <button id="btnZoomLabel" type="button" class="px-2 h-7 min-w-[3.75rem] rounded-full hover:bg-slate-100 font-mono" title="点击恢复 100% (Ctrl/⌘+1)">100%</button>
+            <button id="btnZoomIn" type="button" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-slate-100 disabled:opacity-40" title="放大 (Ctrl/⌘+= 或 Ctrl/⌘+滚轮)">+</button>
+            <span class="w-px h-4 bg-slate-300 mx-1" aria-hidden="true"></span>
+            <button id="btnZoomFit" type="button" class="px-2 h-7 rounded-full hover:bg-slate-100" title="适应窗口 (Ctrl/⌘+0)">⛶ 适应</button>
+            <button id="btnZoomActual" type="button" class="px-2 h-7 rounded-full hover:bg-slate-100" title="实际像素 100% (Ctrl/⌘+1)">1:1</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div><!-- /viewMask -->
+
+  <footer class="mt-6 text-center text-[11px] text-slate-400">
+    所有数据存于本地浏览器 · 凭据不会出端口
+    <span class="mx-1">·</span>
+    <a class="hover:underline" href="https://docs.apimart.ai/cn/api-reference/images/gpt-image-2/generation" target="_blank" rel="noopener">API 文档</a>
+    <span class="mx-1">·</span>
+    <button id="btnVersion" class="hover:underline" title="点击查看完整更新日志"><span id="versionLabel">v0.0.0</span> · 更新日志</button>
+  </footer>
+</div>
+
+<!-- ============== 版本 / 更新日志 Modal ============== -->
+<div id="versionModal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-xl p-5 max-w-2xl w-full shadow-2xl max-h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between mb-3 pb-3 border-b border-slate-100">
+      <h3 class="font-semibold flex items-center gap-2">
+        <span>📋 更新日志</span>
+        <span id="versionModalLabel" class="text-xs font-normal text-slate-500 font-mono"></span>
+      </h3>
+      <button id="versionModalClose" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+    </div>
+    <div id="versionModalBody" class="flex-1 overflow-y-auto scrollbar-thin space-y-4 pr-1"></div>
+    <div class="pt-3 mt-3 border-t border-slate-100 text-[11px] text-slate-400 text-center">
+      历史也可看 <code class="bg-slate-100 px-1 rounded">CHANGELOG.md</code>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 任务级重试设置 Modal ============== -->
+<div id="taskRetryModal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-xl p-5 max-w-md w-full shadow-2xl" id="taskRetryModalCard">
+    <h3 class="font-semibold mb-1 flex items-center gap-2">
+      <span>⚙ 此任务的重试设置</span>
+    </h3>
+    <p class="text-[11px] text-slate-500 truncate mb-3" id="taskRetryModalTaskName"></p>
+    <div class="space-y-3">
+      <label class="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="checkbox" id="taskRetryUseOverride" class="w-4 h-4" />
+        为此任务覆盖全局设置
+      </label>
+      <div id="taskRetryFields" class="space-y-3 pl-6 hidden">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">模式</label>
+          <select id="taskRetryMode" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
+            <option value="off">关闭（不再重试）</option>
+            <option value="count">按次数</option>
+            <option value="duration">按时长</option>
+            <option value="forever">直到成功</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div id="taskRetryCountWrap">
+            <label class="block text-xs text-slate-500 mb-1">最多次数</label>
+            <input id="taskRetryCount" type="number" min="1" max="100" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          </div>
+          <div id="taskRetryDurationWrap" class="hidden">
+            <label class="block text-xs text-slate-500 mb-1">总时长 (分)</label>
+            <input id="taskRetryDuration" type="number" min="1" max="1440" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">间隔 (秒)</label>
+            <input id="taskRetryInterval" type="number" min="1" max="600" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          </div>
+          <div class="flex items-end pb-2">
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input id="taskRetrySkip4xx" type="checkbox" class="w-3.5 h-3.5" /> 跳过 4xx
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="text-[11px] text-slate-500 bg-slate-50 rounded p-2 leading-relaxed">
+        当前已重试 <span id="taskRetryUsed" class="font-mono text-slate-700">0</span> 次<br/>
+        全局设置：<span id="taskRetryGlobalDesc" class="font-mono text-slate-700"></span>
+      </div>
+    </div>
+    <div class="flex justify-between gap-2 mt-5 pt-3 border-t border-slate-100">
+      <button id="taskRetryStop" class="px-3 py-2 text-sm rounded-lg border border-red-300 text-red-700 hover:bg-red-50">立即停止重试</button>
+      <div class="flex gap-2">
+        <button id="taskRetryCancel" class="px-3 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">取消</button>
+        <button id="taskRetrySave" class="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/* ============================================================
+ *  MASK AI MODULE (v0.11.0)
+ *  纯前端 MediaPipe Tasks Vision，懒加载，暴露到 window.maskAI
+ * ========================================================== */
+import {
+  ImageSegmenter,
+  PoseLandmarker,
+  HandLandmarker,
+  FaceDetector,
+  FilesetResolver
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm";
+
+const CDN_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODELS = {
+  selfie: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+  pose:   'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task',
+  hand:   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
+  face:   'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite'
+};
+
+let vision = null, visionP = null;
+let segmenter = null, segP = null;
+let poseL = null, poseP = null;
+let handL = null, handP = null;
+let faceD = null, faceP = null;
+
+async function ensureVision(){
+  if (vision) return vision;
+  if (!visionP) visionP = FilesetResolver.forVisionTasks(CDN_WASM);
+  vision = await visionP;
+  return vision;
+}
+async function getSegmenter(){
+  if (segmenter) return segmenter;
+  if (!segP){
+    segP = (async () => {
+      const v = await ensureVision();
+      return ImageSegmenter.createFromOptions(v, {
+        baseOptions: { modelAssetPath: MODELS.selfie },
+        runningMode: 'IMAGE',
+        outputCategoryMask: true,
+        outputConfidenceMasks: false
+      });
+    })();
+  }
+  segmenter = await segP;
+  return segmenter;
+}
+async function getPose(){
+  if (poseL) return poseL;
+  if (!poseP){
+    poseP = (async () => {
+      const v = await ensureVision();
+      return PoseLandmarker.createFromOptions(v, {
+        baseOptions: { modelAssetPath: MODELS.pose },
+        runningMode: 'IMAGE',
+        numPoses: 10,
+        minPoseDetectionConfidence: 0.3,
+        minPosePresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3,
+        outputSegmentationMasks: true
+      });
+    })();
+  }
+  poseL = await poseP;
+  return poseL;
+}
+async function getHand(){
+  if (handL) return handL;
+  if (!handP){
+    handP = (async () => {
+      const v = await ensureVision();
+      return HandLandmarker.createFromOptions(v, {
+        baseOptions: { modelAssetPath: MODELS.hand },
+        runningMode: 'IMAGE',
+        numHands: 10,
+        minHandDetectionConfidence: 0.3,
+        minHandPresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3
+      });
+    })();
+  }
+  handL = await handP;
+  return handL;
+}
+async function getFace(){
+  if (faceD) return faceD;
+  if (!faceP){
+    faceP = (async () => {
+      const v = await ensureVision();
+      return FaceDetector.createFromOptions(v, {
+        baseOptions: { modelAssetPath: MODELS.face },
+        runningMode: 'IMAGE',
+        minDetectionConfidence: 0.3,
+        minSuppressionThreshold: 0.3
+      });
+    })();
+  }
+  faceD = await faceP;
+  return faceD;
+}
+
+/* ---------- 几何辅助 ---------- */
+function convexHull(pts){
+  pts = pts.filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (pts.length < 3) return pts.slice();
+  pts = [...pts].sort((a,b) => a.x - b.x || a.y - b.y);
+  const cross = (O,A,B) => (A.x-O.x)*(B.y-O.y) - (A.y-O.y)*(B.x-O.x);
+  const lower = [];
+  for (const p of pts){
+    while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--){
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  upper.pop(); lower.pop();
+  return lower.concat(upper);
+}
+
+function drawPolyMask(maskCtx, points, dilatePx){
+  if (!points || points.length === 0) return false;
+  const ctx = maskCtx;
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,1)';
+  ctx.strokeStyle = 'rgba(255,255,255,1)';
+  ctx.lineWidth = Math.max(1, dilatePx * 2);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  return true;
+}
+
+function makeMaskCanvas(w, h){
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
+}
+
+/* ---------- 各任务实现，统一返回 RGBA ImageData (alpha=mask, 白色) ---------- */
+/* 用 SelfieSegmenter 输出（单人优化，速度快），返回 0/1 mask buffer */
+async function _selfieMask(srcCanvas){
+  const seg = await getSegmenter();
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const r = seg.segment(srcCanvas);
+  const cat = r.categoryMask;
+  if (!cat) throw new Error('selfie segmenter 未返回 categoryMask');
+  const arr = cat.getAsUint8Array();
+  const mw = cat.width, mh = cat.height;
+  const buf = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++){
+    const my = Math.min(mh-1, Math.floor(y * mh / h));
+    for (let x = 0; x < w; x++){
+      const mx = Math.min(mw-1, Math.floor(x * mw / w));
+      const v = arr[my * mw + mx];
+      // selfie: 0 = foreground person, !0 = background
+      if (v < 128) buf[y * w + x] = 1;
+    }
+  }
+  cat.close && cat.close();
+  return { buf, w, h, source: 'selfie', count: 1 };
+}
+
+/* 用 PoseLandmarker 的 per-person segmentationMasks 多人独立合并，返回 0/1 mask buffer */
+async function _poseMask(srcCanvas){
+  const pose = await getPose();
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const r = pose.detect(srcCanvas);
+  const segs = r.segmentationMasks || [];
+  const poses = r.landmarks || [];
+  if (!segs.length) return null; // 没有 seg mask 或没检测到人，调用方 fallback
+  const buf = new Uint8Array(w * h);
+  for (const m of segs){
+    const arr = m.getAsFloat32Array ? m.getAsFloat32Array() : m.getAsUint8Array();
+    const isFloat = arr instanceof Float32Array;
+    const mw = m.width, mh = m.height;
+    for (let y = 0; y < h; y++){
+      const my = Math.min(mh-1, Math.floor(y * mh / h));
+      for (let x = 0; x < w; x++){
+        const mx = Math.min(mw-1, Math.floor(x * mw / w));
+        const v = arr[my * mw + mx];
+        // pose seg mask: 高值 = 该 person；多个 person 时 OR 合并
+        const isPerson = isFloat ? (v > 0.5) : (v > 127);
+        if (isPerson) buf[y * w + x] = 1;
+      }
+    }
+    m.close && m.close();
+  }
+  return { buf, w, h, source: 'pose', count: poses.length };
+}
+
+function _bufToImageData(buf, w, h, invert){
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < buf.length; i++){
+    const a = (buf[i] ? 255 : 0);
+    const v = invert ? (255 - a) : a;
+    const o = i * 4;
+    out[o] = 255; out[o+1] = 255; out[o+2] = 255; out[o+3] = v;
+  }
+  return new ImageData(out, w, h);
+}
+
+async function segmentPerson(srcCanvas){
+  // 多人场景优先用 Pose seg mask（每人独立、不会圈中间物体）；为空 fallback selfie
+  let m = await _poseMask(srcCanvas);
+  if (!m) m = await _selfieMask(srcCanvas);
+  return {
+    imageData: _bufToImageData(m.buf, m.w, m.h, false),
+    info: m.source === 'pose' ? `人物 (${m.count} 人, pose)` : '人物 (selfie)'
+  };
+}
+
+async function segmentBackground(srcCanvas){
+  let m = await _poseMask(srcCanvas);
+  if (!m) m = await _selfieMask(srcCanvas);
+  return {
+    imageData: _bufToImageData(m.buf, m.w, m.h, true),
+    info: m.source === 'pose' ? `背景 (排除 ${m.count} 人)` : '背景 (selfie)'
+  };
+}
+
+async function segmentByPose(srcCanvas, idxList, dilateRatio, label){
+  const pose = await getPose();
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const r = pose.detect(srcCanvas);
+  const allPoses = r.landmarks || [];
+  if (!allPoses.length) throw new Error('未检测到人体（光线 / 全身未入框 / 人物太小）');
+  const mask = makeMaskCanvas(w, h);
+  const mctx = mask.getContext('2d');
+  const dilate = Math.max(8, Math.min(w, h) * dilateRatio);
+  let drawn = 0;
+  for (const lms of allPoses){
+    const pts = idxList
+      .map(i => lms[i])
+      .filter(p => p && (p.visibility == null || p.visibility > 0.1))
+      .map(p => ({ x: p.x * w, y: p.y * h }));
+    if (pts.length < 2) continue;  // 此人这部分点不够，跳过；不和其他人合并以免圈住中间物体
+    const hull = convexHull(pts);
+    if (drawPolyMask(mctx, hull, dilate)) drawn++;
+  }
+  // 释放 segmentationMasks（如有），不在此处用
+  if (r.segmentationMasks) for (const m of r.segmentationMasks) m.close && m.close();
+  if (drawn === 0) throw new Error(`${label}: 每个人的相关关键点都不足`);
+  return { imageData: mctx.getImageData(0, 0, w, h), info: `${label} (${drawn} 人)` };
+}
+
+async function segmentHead(srcCanvas){
+  // 优先用 FaceDetector：多脸 box → 椭圆 mask（覆盖头顶 / 下巴 / 头发）
+  // 比 Pose 0-10 关键点准很多，多人场景能识别 10+ 人
+  const fd = await getFace();
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const r = fd.detect(srcCanvas);
+  const detections = r.detections || [];
+  if (!detections.length){
+    // fallback：用 pose 0-10 关键点凸包
+    return segmentByPose(srcCanvas, [0,1,2,3,4,5,6,7,8,9,10], 0.06, '头部 (pose fallback)');
+  }
+  const mask = makeMaskCanvas(w, h);
+  const mctx = mask.getContext('2d');
+  mctx.fillStyle = 'rgba(255,255,255,1)';
+  for (const d of detections){
+    const box = d.boundingBox;
+    if (!box) continue;
+    // FaceDetector 给的是脸 box；扩展成包住整个头部
+    const cx = box.originX + box.width / 2;
+    const cy = box.originY + box.height / 2;
+    // 头部纵向比脸长，纵向多扩 60%（上面头发顶），重心稍上移
+    const rx = box.width * 0.75;
+    const ry = box.height * 0.95;
+    const cyHead = cy - box.height * 0.15;
+    mctx.beginPath();
+    mctx.ellipse(cx, cyHead, rx, ry, 0, 0, Math.PI * 2);
+    mctx.fill();
+  }
+  return { imageData: mctx.getImageData(0, 0, w, h), info: `头部 (${detections.length} 人, face)` };
+}
+async function segmentFeet(srcCanvas){
+  // Pose 关键点：25,26 膝盖；27,28 脚踝；29,30 脚跟；31,32 脚趾
+  // 优先用脚部 6 点（脚踝/脚跟/脚趾）；不可见时 fallback 用 ankle+knee 估算椭圆
+  const pose = await getPose();
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const r = pose.detect(srcCanvas);
+  const allPoses = r.landmarks || [];
+  if (!allPoses.length) throw new Error('未检测到人体姿态（全身未入框 / 人物太小 / 光线）');
+  const mask = makeMaskCanvas(w, h);
+  const mctx = mask.getContext('2d');
+  const dilate = Math.max(10, Math.min(w, h) * 0.04);
+  let drawn = 0, estimated = 0;
+  for (const lms of allPoses){
+    // 左脚组 / 右脚组
+    for (const grp of [{ankle:27, heel:29, toe:31, knee:25},
+                       {ankle:28, heel:30, toe:32, knee:26}]){
+      const vis = (i) => lms[i] && (lms[i].visibility == null || lms[i].visibility > 0.1);
+      const footPts = [grp.ankle, grp.heel, grp.toe]
+        .filter(vis)
+        .map(i => ({ x: lms[i].x * w, y: lms[i].y * h }));
+      if (footPts.length >= 2){
+        // 至少 2 个脚点可见 → 凸包
+        const hull = convexHull(footPts);
+        if (drawPolyMask(mctx, hull, dilate)) drawn++;
+      } else if (vis(grp.ankle) && vis(grp.knee)){
+        // 脚点全被遮挡，但踝/膝可见 → 沿小腿方向延伸 30% 画椭圆估算
+        const ax = lms[grp.ankle].x * w, ay = lms[grp.ankle].y * h;
+        const kx = lms[grp.knee].x * w,  ky = lms[grp.knee].y * h;
+        const dx = ax - kx, dy = ay - ky;
+        const len = Math.hypot(dx, dy) || 1;
+        const fx = ax + dx * 0.3;
+        const fy = ay + dy * 0.3;
+        mctx.fillStyle = 'rgba(255,255,255,1)';
+        mctx.beginPath();
+        mctx.ellipse(fx, fy,
+                     Math.max(20, len * 0.35),
+                     Math.max(15, len * 0.22),
+                     Math.atan2(dy, dx), 0, Math.PI * 2);
+        mctx.fill();
+        estimated++;
+      }
+    }
+  }
+  if (r.segmentationMasks) for (const m of r.segmentationMasks) m.close && m.close();
+  if (drawn + estimated === 0) throw new Error('脚被完全遮挡（坐姿 / 茶几 / 桌面下）');
+  const total = drawn + estimated;
+  const tag = estimated > 0 ? `${total} 只, ${estimated} 只估算` : `${total} 只`;
+  return { imageData: mctx.getImageData(0, 0, w, h), info: `双脚 (${tag})` };
+}
+
+async function segmentHands(srcCanvas){
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const mask = makeMaskCanvas(w, h);
+  const mctx = mask.getContext('2d');
+  // ---- 路径 A：HandLandmarker（精度高，21 点/手） ----
+  const hand = await getHand();
+  const r = hand.detect(srcCanvas);
+  const allHands = r.landmarks || [];
+  const dilate = Math.max(10, Math.min(w, h) * 0.025);
+  let detected = 0;
+  for (const lms of allHands){
+    const pts = lms.map(p => ({ x: p.x * w, y: p.y * h }));
+    const hull = convexHull(pts);
+    if (drawPolyMask(mctx, hull, dilate)) detected++;
+  }
+  if (detected > 0){
+    return { imageData: mctx.getImageData(0, 0, w, h), info: `双手 (${detected} 只)` };
+  }
+  // ---- 路径 B：fallback 到 Pose 的手部关键点（每手 4 点：腕/小指/食指/拇指） ----
+  const pose = await getPose();
+  const pr = pose.detect(srcCanvas);
+  const allPoses = pr.landmarks || [];
+  const dilate2 = Math.max(15, Math.min(w, h) * 0.04);  // 点少所以膨胀大
+  let estimated = 0;
+  for (const lms of allPoses){
+    // 左手 15(wrist) 17(pinky) 19(index) 21(thumb)
+    // 右手 16(wrist) 18(pinky) 20(index) 22(thumb)
+    for (const idxs of [[15,17,19,21], [16,18,20,22]]){
+      const pts = idxs
+        .map(i => lms[i])
+        .filter(p => p && (p.visibility == null || p.visibility > 0.1))
+        .map(p => ({ x: p.x * w, y: p.y * h }));
+      if (pts.length < 2) continue;
+      const hull = convexHull(pts);
+      if (drawPolyMask(mctx, hull, dilate2)) estimated++;
+    }
+  }
+  if (pr.segmentationMasks) for (const m of pr.segmentationMasks) m.close && m.close();
+  if (estimated > 0){
+    return { imageData: mctx.getImageData(0, 0, w, h), info: `双手 (pose fallback, ${estimated} 只)` };
+  }
+  throw new Error('未检测到手（手被遮挡 / 太小 / 多人坐姿）');
+}
+
+window.maskAI = {
+  ready: true,
+  segmentPerson,
+  segmentBackground,
+  segmentHead,
+  segmentHands,
+  segmentFeet
+};
+window.dispatchEvent(new Event('maskAIReady'));
+</script>
+
+<script>
+/* ============================================================
+ *  VERSION & CHANGELOG
+ * ========================================================== */
+const APP_VERSION = '0.11.2';
+const APP_RELEASE_DATE = '2026-05-15';
+const APP_CHANGELOG = [
+  {
+    version: '0.11.2', date: '2026-05-15',
+    title: '坐姿 / 遮挡场景修复 + 头部改用 FaceDetector',
+    changes: [
+      '头部：改用 MediaPipe FaceDetector（多脸 box → 椭圆），比 Pose 0-10 关键点准很多，多人坐姿能识别 10+ 人；Pose 作为 fallback',
+      '阈值放宽：Pose / Hand / Face 的 minDetectionConfidence 全部降到 0.3；关键点可见性阈值 0.3→0.1，坐姿、半遮挡场景能识别',
+      'numPoses: 5→10，numHands: 6→10，最多覆盖 10 人',
+      '手部 fallback：HandLandmarker 完全失败时改用 Pose 的腕/食指/小指/拇指 4 点（每只手）',
+      '脚部 fallback：脚 6 点全被遮挡（坐姿 / 桌面下）时用脚踝+膝盖估算位置，沿小腿方向延伸 30% 画椭圆',
+      'toast 信息标注「pose fallback / N 只估算」让你知道走的哪条路径'
+    ]
+  },
+  {
+    version: '0.11.1', date: '2026-05-15',
+    title: '快速选区多人场景修复',
+    changes: [
+      '修复：多人场景只识别到 1 人 — PoseLandmarker numPoses 从 1 升到 5；模型从 lite 换成 full（多人精度提升明显，5 MB → 9 MB）',
+      '修复（关键）：之前把所有人的关键点合并取一个大凸包，导致两个人之间的物体（桌椅 / 中间空气）被圈进遮罩。改为每人独立画凸包合并到同一 mask，不再串扰',
+      '修复：HandLandmarker numHands 从 2 升到 6（支持最多 3 人的手）',
+      '改进：人物 / 背景 选区改用 PoseLandmarker 的 per-person segmentationMasks（每人独立、范围紧凑），多人场景失败时 fallback 到 Selfie Segmenter',
+      'toast 信息会显示「N 人 (pose)」或「(selfie)」让你知道走的哪条路径'
+    ]
+  },
+  {
+    version: '0.11.0', date: '2026-05-15',
+    title: '快速选区（纯前端 MediaPipe，AI 智能化第一步）',
+    changes: [
+      '新增：「✨ 快速选区」面板 — 一键生成「人物 / 背景 / 头部 / 双手 / 双脚」遮罩',
+      '技术：纯前端 MediaPipe Tasks Vision（jsdelivr CDN），图片不离开本机',
+      '懒加载：首次点击对应按钮时才下载模型（约 5–15 MB），之后秒开',
+      'AI 结果合并到现有遮罩（OR），可撤销；首次出错（CDN 不可达）会 toast 提示',
+      '人物 / 背景：MediaPipe Selfie Segmenter（准确率高）',
+      '头部：MediaPipe Pose 关键点 0–10 凸包 + 膨胀',
+      '双手：MediaPipe Hands 21 关键点凸包 + 膨胀（精度好）',
+      '双脚：MediaPipe Pose 脚踝/脚跟/脚趾 6 点凸包（粗略，需手动精修）',
+      '面板状态条实时显示模型「未加载 / 已就绪 / 运行中… / 失败可重试」'
+    ]
+  },
+  {
+    version: '0.10.0', date: '2026-05-15',
+    title: 'Mask 编辑器：拖拽载入 + 清除参考图',
+    changes: [
+      '新增：拖拽载入 — 把本地图片或网页图片直接拖到画布即可载入；拖入时显示蓝色蒙层与虚线提示框',
+      '新增：左侧工具区「🗑 清除参考图」按钮，独立于主页面；当前画布有涂抹时会先确认',
+      '兼容：拖入文本 URL（http(s) / data:image）也会被识别',
+      '保护：拖入新图替换、清除参考图、都会保护已有涂抹（先 confirm）',
+      '空态文案更新：从「⬅ 在左侧上传」改为更醒目的「拖到这里 / 上传 / 用主页参考图」三选一'
+    ]
+  },
+  {
+    version: '0.9.0', date: '2026-05-15',
+    title: 'Mask 编辑器缩放（Photopea / SD WebUI 风格）',
+    changes: [
+      'Mask 编辑器新增缩放：浮动工具栏（− / 缩放百分比 / + / ⛶ 适应 / 1:1）位于画布右下角',
+      'Ctrl/⌘ + 滚轮：以光标位置为中心放大缩小（屏幕锚点保持不动）',
+      '键盘快捷键：Ctrl/⌘ += 放大、Ctrl/⌘ + - 缩小、Ctrl/⌘ + 0 适应窗口、Ctrl/⌘ + 1 实际像素（拦截浏览器默认）',
+      '缩放范围 10% – 1000%；放大后通过容器滚动条平移；普通滚轮（无 Ctrl/⌘）仍走默认滚动',
+      '光标圆圈线宽根据缩放自适应（始终 ~1.5 屏幕像素）',
+      '画布信息条实时显示当前缩放百分比'
+    ]
+  },
+  {
+    version: '0.8.0', date: '2026-05-14',
+    title: '预览图修复 + 链接显示 + 选择性下载 + Mask Alpha 校验',
+    changes: [
+      '修复：任务卡图片预览不显示的 bug（动态 Tailwind 类名 sm:grid-cols-${N} CDN 编译不出来 → 改成静态枚举类）',
+      '新增：每张生成图下方显示完整 URL（可点击全选 + 单独复制按钮）',
+      '新增：每张生成图左上角复选框，可跨任务选中后「下载选中 (N)」打包',
+      '新增：批量操作栏新按「下载选中」按钮，实时显示选中数',
+      '增强：Mask 编辑器导出 / 保存到主页面时，统计透明像素并 toast 确认 Alpha 通道已生效',
+      '增强：图片控件（复制 / 下载）改为始终显示（之前仅 hover 显示，触屏看不到）'
+    ]
+  },
+  {
+    version: '0.7.0', date: '2026-05-13',
+    title: '批量轮询 + URL 倒计时 + ETA',
+    changes: [
+      '新增 POST /v1/tasks/batch 批量轮询：所有进行中任务合并为一次请求，并发场景大幅减少请求数与 429 风险',
+      '不可用 / 格式不符时自动回退到 GET /v1/tasks/{id} 单任务轮询',
+      '已完成任务卡显示 URL 失效倒计时（24h 边界，< 6h 琥珀色，< 1h 红色）',
+      '进行中任务进度条下显示「预计 / 剩余」秒数（基于 estimated_time）'
+    ]
+  },
+  {
+    version: '0.6.0', date: '2026-05-13',
+    title: '独立滚动 + 任务折叠 + Mask 编辑器',
+    changes: [
+      '右侧任务队列独立滚动条（lg 屏幕），批量操作栏置顶',
+      '每个任务可折叠 / 展开，折叠态显示首图缩略图；新增「展开全部 / 折叠全部」',
+      '🎨 Mask 编辑器作为独立 tab：涂抹 / 擦除 / 笔刷大小 / 硬度 / 撤销重做 / 反转 / 全部涂抹',
+      '导出符合 API 契约：涂抹区透明、未涂区白色不透明',
+      '一键「用作此次生成」自动写入主页面并切到 official 模型',
+      '快捷键 B / E / [ ] / Ctrl+Z / Ctrl+Shift+Z'
+    ]
+  },
+  {
+    version: '0.5.0', date: '2026-05-12',
+    title: '任务级重试覆盖 + 清空关闭全局重试',
+    changes: [
+      '失败 / 等待重试的任务可单独配置重试规则（覆盖全局）',
+      '任务级 Modal：模式 / 次数 / 时长 / 间隔 / 跳过 4xx / 立即停止重试',
+      '清空任务时同步关闭全局自动重试，避免下次提交不小心触发'
+    ]
+  },
+  {
+    version: '0.4.0', date: '2026-05-11',
+    title: '余额展示 + 成本估算',
+    changes: [
+      '顶部实时显示用户余额 + Key 余额，自动 / 手动刷新',
+      '提交前预估本次成本，超出余额会弹确认框',
+      '价格表（参考值 / 实测均值），任务完成后从 data.cost 自动学习单价'
+    ]
+  },
+  {
+    version: '0.3.1', date: '2026-05-11',
+    title: '内容审核失败也允许重试',
+    changes: [
+      '去掉对 content_policy / safety / moderation 关键词的硬拦，按选定模式重试',
+      '同步更新接口文档说明'
+    ]
+  },
+  {
+    version: '0.3.0', date: '2026-05-10',
+    title: '自动重试 + Mask 本地上传',
+    changes: [
+      '失败自动重试：按次数 / 按时长 / 直到成功，可设间隔与并发上限',
+      'Mask 字段支持本地文件上传 + 缩略图预览 + 尺寸校验',
+      'Mask 内联使用说明'
+    ]
+  },
+  {
+    version: '0.2.0', date: '2026-05-10',
+    title: '具体像素选择器',
+    changes: [
+      '比例 + 分辨率下面新增「具体像素」选择，按 1K / 2K / 4K 分组列出预设',
+      '支持自定义宽高输入，超长边 / 总像素自动校验',
+      '直接以 size:"WxH" 调用 API 的高级用法'
+    ]
+  },
+  {
+    version: '0.1.0', date: '2026-05-10',
+    title: '初始版本',
+    changes: [
+      '基础生成表单：模型 / prompt / 比例 / 分辨率 / 参考图',
+      '任务队列 + 自动轮询 + 失败原因展示',
+      '批量下载（ZIP）+ 并发上限',
+      'API Key 本地保存'
+    ]
+  }
+];
+
+/* ============================================================
+ *  CONSTANTS
+ * ========================================================== */
+const SIZE_PIXEL_MAP = {
+  '1:1':   { '1k': '1024×1024', '2k': '2048×2048', '4k': null },
+  '3:2':   { '1k': '1536×1024', '2k': '2048×1360', '4k': null },
+  '2:3':   { '1k': '1024×1536', '2k': '1360×2048', '4k': null },
+  '4:3':   { '1k': '1024×768',  '2k': '2048×1536', '4k': null },
+  '3:4':   { '1k': '768×1024',  '2k': '1536×2048', '4k': null },
+  '5:4':   { '1k': '1280×1024', '2k': '2560×2048', '4k': null },
+  '4:5':   { '1k': '1024×1280', '2k': '2048×2560', '4k': null },
+  '16:9':  { '1k': '1536×864',  '2k': '2048×1152', '4k': '3840×2160' },
+  '9:16':  { '1k': '864×1536',  '2k': '1152×2048', '4k': '2160×3840' },
+  '2:1':   { '1k': '2048×1024', '2k': '2688×1344', '4k': '3840×1920' },
+  '1:2':   { '1k': '1024×2048', '2k': '1344×2688', '4k': '1920×3840' },
+  '21:9':  { '1k': '2016×864',  '2k': '2688×1152', '4k': '3840×1648' },
+  '9:21':  { '1k': '864×2016',  '2k': '1152×2688', '4k': '1648×3840' }
+};
+const SIZES = ['auto','1:1','3:2','2:3','4:3','3:4','5:4','4:5','16:9','9:16','2:1','1:2','21:9','9:21'];
+
+// 用户提供的「具体像素」预设（按分辨率档位分组）。pickedAuto 时不会用到，
+// 用户在 pixelMode 选了具体值时，将以 size:"WxH" 直传给 API（高级用法）。
+const PIXEL_PRESETS = {
+  '1k': { label: '1K · 长边≤1536', items: [
+    { ratio: '1:1',  w: 1024, h: 1024 },
+    { ratio: '16:9', w: 1536, h: 1024 },
+    { ratio: '9:16', w: 1024, h: 1536 },
+    { ratio: '3:4',  w: 1536, h: 2048 },
+    { ratio: '4:3',  w: 2048, h: 1536 },
+    { ratio: '9:21', w: 768,  h: 1792 },
+    { ratio: '21:9', w: 1792, h: 768  }
+  ]},
+  '2k': { label: '2K · 长边≤2048', items: [
+    { ratio: '1:1',  w: 2048, h: 2048 },
+    { ratio: '16:9', w: 2048, h: 1152 },
+    { ratio: '9:16', w: 1152, h: 2048 },
+    { ratio: '3:4',  w: 1536, h: 2048 },
+    { ratio: '4:3',  w: 2048, h: 1536 },
+    { ratio: '9:21', w: 880,  h: 2048 },
+    { ratio: '21:9', w: 2048, h: 880  }
+  ]},
+  '4k': { label: '4K · 总像素≤829万 · 长边≤3840', items: [
+    { ratio: '1:1',  w: 2880, h: 2880 },
+    { ratio: '16:9', w: 3840, h: 2160 },
+    { ratio: '9:16', w: 2160, h: 3840 },
+    { ratio: '3:4',  w: 2480, h: 3312 },
+    { ratio: '4:3',  w: 3312, h: 2480 },
+    { ratio: '9:21', w: 1648, h: 3840 },
+    { ratio: '21:9', w: 3840, h: 1648 }
+  ]}
+};
+const STORAGE_KEY = 'apimart_gpti2_studio_v1';
+const PRICES_KEY = 'apimart_gpti2_prices_v1';
+const MAX_REF_IMAGES = 16;
+const POLL_INTERVAL_MS = 4000;
+const POLL_FIRST_DELAY_MS = 8000;
+const POLL_TIMEOUT_MS = 8 * 60 * 1000; // 8 分钟硬上限，避免无限等
+const BALANCE_REFRESH_DEBOUNCE_MS = 1500;
+
+/**
+ * 默认每张图美元价格。来源：
+ *  - gpt-image-2 / 2K：文档示例 actual cost 0.05279 → 取 0.053
+ *  - gpt-image-2 / 1K, 4K：等比缩放推算
+ *  - gpt-image-2-official：参考 OpenAI gpt-image 公开档位（low/medium/high）
+ * 这只是参考值，每次任务完成后会用真实 data.cost 学习并覆盖。
+ */
+const DEFAULT_PRICES = {
+  'gpt-image-2': {
+    '1k': { default: 0.020 },
+    '2k': { default: 0.053 },
+    '4k': { default: 0.110 }
+  },
+  'gpt-image-2-official': {
+    '1k': { auto: 0.042, low: 0.011, medium: 0.042, high: 0.167 },
+    '2k': { auto: 0.063, low: 0.022, medium: 0.063, high: 0.250 },
+    '4k': { auto: 0.125, low: 0.045, medium: 0.125, high: 0.500 }
+  }
+};
+
+/* ============================================================
+ *  STATE
+ * ========================================================== */
+const state = {
+  apiKey: '',
+  baseUrl: 'https://api.apimart.ai/v1',
+  concurrency: 3,
+  model: 'gpt-image-2',
+  refImages: [], // {id, name, dataUri or url, isUrl, sizeBytes}
+  maskFile: null, // {name, dataUri, w, h, sizeBytes} | null  - 本地上传的 mask
+  tasks: [],     // task objects (see addTask)
+  selectedImages: new Set(), // "taskId|imgIdx" 集合，用于「下载选中」
+  pollers: new Map(), // legacy（已不使用）— 全局 batch ticker 接管
+  retryTimers: new Map(), // taskId -> 重试 setTimeout 句柄
+  activeCount: 0,
+  pendingQueue: [], // tasks waiting to be submitted (for concurrency)
+  retry: {
+    mode: 'off',     // off | count | duration | forever
+    count: 3,
+    duration: 10,    // 分钟
+    interval: 5,     // 秒
+    skip4xx: true
+  },
+  balance: {
+    user: null,        // 用户余额（美元/RMB/Token，看账户配置）
+    userUsed: null,
+    token: null,       // 当前 Key 余额
+    tokenUsed: null,
+    unlimited: false,  // 是否无限额度
+    lastUpdate: 0,
+    loading: false
+  },
+  // 学习到的实际单价：key = "model|resolution|quality" -> {samples, total, avg}
+  priceLearned: {}
+};
+
+/* ============================================================
+ *  PERSISTENCE
+ * ========================================================== */
+function loadConfig(){
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const cfg = JSON.parse(raw);
+    if (cfg.apiKey) state.apiKey = cfg.apiKey;
+    if (cfg.baseUrl) state.baseUrl = cfg.baseUrl;
+    if (cfg.concurrency) state.concurrency = cfg.concurrency;
+    if (cfg.retry) Object.assign(state.retry, cfg.retry);
+  } catch(e){ console.warn(e); }
+  try {
+    const rawP = localStorage.getItem(PRICES_KEY);
+    if (rawP){
+      const p = JSON.parse(rawP);
+      if (p.priceLearned) state.priceLearned = p.priceLearned;
+    }
+  } catch(e){ console.warn(e); }
+}
+function saveConfig(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    apiKey: state.apiKey,
+    baseUrl: state.baseUrl,
+    concurrency: state.concurrency,
+    retry: state.retry
+  }));
+}
+function savePrices(){
+  localStorage.setItem(PRICES_KEY, JSON.stringify({
+    priceLearned: state.priceLearned
+  }));
+}
+function clearConfig(){
+  localStorage.removeItem(STORAGE_KEY);
+  state.apiKey = '';
+  $('#apiKey').value = '';
+  updateApiKeyStatus();
+  renderBalance();
+  toast('已清除本地保存的 API Key', 'success');
+}
+function resetLearnedPrices(){
+  state.priceLearned = {};
+  savePrices();
+  renderCostEstimate();
+  renderPriceTable();
+  toast('已重置学习到的价格', 'success');
+}
+
+/* ============================================================
+ *  HELPERS
+ * ========================================================== */
+const $ = (s, p=document) => p.querySelector(s);
+const $$ = (s, p=document) => Array.from(p.querySelectorAll(s));
+const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtBytes = b => b < 1024 ? b+'B' : b < 1024*1024 ? (b/1024).toFixed(1)+'KB' : (b/1048576).toFixed(2)+'MB';
+const fmtTime = ts => new Date(ts).toLocaleTimeString('zh-CN', {hour12:false});
+const elapsed = (start, end) => Math.max(0, Math.round(((end||Date.now()) - start)/1000));
+
+// 图片 URL 剩余时间（expSec 为 Unix 秒级时间戳；文档里 expires_at = completed + 24h）
+function expiresInfo(expSec){
+  if (!expSec) return null;
+  const ms = expSec * 1000 - Date.now();
+  if (ms <= 0) return { text: '已过期', cls: 'text-red-600 font-medium', expired: true };
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const text = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  let cls = 'text-slate-500';
+  if (ms < 3600000) cls = 'text-red-600';        // < 1h
+  else if (ms < 6 * 3600000) cls = 'text-amber-600'; // < 6h
+  return { text, cls, expired: false };
+}
+
+function uid(prefix='id'){ return prefix+'_'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+
+function toast(msg, type='info', timeout=3500){
+  const colors = {info:'bg-slate-800', success:'bg-emerald-600', warn:'bg-amber-600', error:'bg-red-600'};
+  const div = document.createElement('div');
+  div.className = `toast ${colors[type]||colors.info} text-white text-sm rounded-lg px-3 py-2 shadow-lg`;
+  div.textContent = msg;
+  $('#toasts').appendChild(div);
+  setTimeout(() => { div.style.opacity='0'; div.style.transition='opacity .3s'; setTimeout(()=>div.remove(), 320); }, timeout);
+}
+
+function fileToDataUri(file){
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(file);
+  });
+}
+
+/* ============================================================
+ *  UI: settings + form init
+ * ========================================================== */
+function updateApiKeyStatus(){
+  const el = $('#apiKeyStatus');
+  if (state.apiKey){
+    const tail = state.apiKey.slice(-4);
+    el.innerHTML = `已配置 Key <span class="font-mono text-slate-700">****${escapeHtml(tail)}</span>`;
+  } else {
+    el.innerHTML = `<span class="text-amber-600">⚠ 未配置 API Key</span>`;
+  }
+}
+
+function initSizeSelect(){
+  const sel = $('#size');
+  sel.innerHTML = SIZES.map(s => {
+    if (s === 'auto') return `<option value="auto">auto · 自动</option>`;
+    return `<option value="${s}">${s}</option>`;
+  }).join('');
+  sel.value = '1:1';
+}
+
+function initPixelModeSelect(){
+  const sel = $('#pixelMode');
+  let html = `<option value="auto">自动 — 按 size + resolution 推导</option>`;
+  for (const tier of ['1k','2k','4k']){
+    const grp = PIXEL_PRESETS[tier];
+    html += `<optgroup label="${grp.label}">`;
+    for (const it of grp.items){
+      const v = `${tier}|${it.ratio}|${it.w}x${it.h}`;
+      html += `<option value="${v}">${it.ratio} — ${it.w}×${it.h}</option>`;
+    }
+    html += `</optgroup>`;
+  }
+  html += `<option value="custom">自定义像素…</option>`;
+  sel.innerHTML = html;
+  sel.value = 'auto';
+}
+
+// 解析 pixelMode 选项；返回 {mode, tier, ratio, w, h} 或 {mode:'auto'} / {mode:'custom'}
+function parsePixelMode(){
+  const v = $('#pixelMode').value;
+  if (v === 'auto') return { mode: 'auto' };
+  if (v === 'custom'){
+    const w = parseInt($('#customW').value, 10);
+    const h = parseInt($('#customH').value, 10);
+    return { mode: 'custom', w: Number.isFinite(w)?w:null, h: Number.isFinite(h)?h:null };
+  }
+  const [tier, ratio, wh] = v.split('|');
+  const [w, h] = wh.split('x').map(Number);
+  return { mode: 'preset', tier, ratio, w, h };
+}
+
+// 计算这次提交将发送的 size + resolution 字符串
+function resolvedSize(){
+  const pm = parsePixelMode();
+  const size = $('#size').value;
+  const res = $('#resolution').value;
+  if (pm.mode === 'preset'){
+    return { size: `${pm.w}x${pm.h}`, resolution: pm.tier, w: pm.w, h: pm.h, mode: 'preset' };
+  }
+  if (pm.mode === 'custom'){
+    return { size: (pm.w && pm.h) ? `${pm.w}x${pm.h}` : null, resolution: res, w: pm.w, h: pm.h, mode: 'custom' };
+  }
+  // auto
+  let pxStr = null;
+  if (size !== 'auto') pxStr = SIZE_PIXEL_MAP[size]?.[res] || null;
+  return { size, resolution: res, displayPx: pxStr, mode: 'auto' };
+}
+
+function updateSizeHints(){
+  const r = resolvedSize();
+  const sizeEl = $('#actualSizeHint');
+  const mpEl = $('#pixelMpHint');
+  const wrap = $('#customPixelWrap');
+  wrap.classList.toggle('hidden', $('#pixelMode').value !== 'custom');
+
+  if (r.mode === 'auto'){
+    if (r.size === 'auto'){
+      sizeEl.textContent = '"auto"';
+      mpEl.textContent = '由服务端选择';
+    } else if (r.displayPx){
+      sizeEl.innerHTML = `"${escapeHtml(r.size)}" · resolution=${r.resolution}`;
+      const [w,h] = r.displayPx.split('×').map(Number);
+      mpEl.textContent = `≈ ${(w*h/1e6).toFixed(2)} MP · ${r.displayPx} px`;
+    } else {
+      sizeEl.innerHTML = `<span class="text-red-600">${escapeHtml(r.size)} 不支持 ${r.resolution.toUpperCase()}</span>`;
+      mpEl.textContent = '';
+    }
+    return;
+  }
+  if (r.mode === 'preset'){
+    sizeEl.innerHTML = `"${escapeHtml(r.size)}" · resolution=${r.resolution}`;
+    mpEl.textContent = `≈ ${(r.w*r.h/1e6).toFixed(2)} MP`;
+    return;
+  }
+  // custom
+  if (!r.w || !r.h){
+    sizeEl.innerHTML = `<span class="text-amber-600">请输入宽和高</span>`;
+    mpEl.textContent = '';
+  } else {
+    const total = r.w * r.h;
+    const mp = (total/1e6).toFixed(2);
+    const overTotal = total > 8294400;
+    const longEdge = Math.max(r.w, r.h);
+    const overEdge = longEdge > 3840;
+    const warn = overTotal || overEdge;
+    sizeEl.innerHTML = `"${escapeHtml(r.size)}" · resolution=${r.resolution}`;
+    mpEl.innerHTML = warn
+      ? `<span class="text-red-600">${mp} MP · 长边 ${longEdge} ${overEdge?'> 3840':''} ${overTotal?'· 总像素超 8.29M':''}</span>`
+      : `${mp} MP · 长边 ${longEdge}`;
+  }
+}
+
+// 当用户选预设时，同步上面的 size + resolution 下拉，让显示一致
+function syncDropdownsFromPixelMode(){
+  const pm = parsePixelMode();
+  if (pm.mode === 'preset'){
+    if ($('#size').value !== pm.ratio) $('#size').value = pm.ratio;
+    if ($('#resolution').value !== pm.tier) $('#resolution').value = pm.tier;
+  }
+}
+
+// 当用户改 size/resolution 时，如果当前 pixelMode 是预设且与新组合不一致，回退到 auto
+function maybeResetPixelMode(){
+  const pm = parsePixelMode();
+  if (pm.mode === 'preset'){
+    if (pm.ratio !== $('#size').value || pm.tier !== $('#resolution').value){
+      $('#pixelMode').value = 'auto';
+    }
+  }
+}
+
+function setModel(model){
+  state.model = model;
+  $$('.model-btn').forEach(b => {
+    if (b.dataset.model === model){
+      b.classList.add('bg-blue-600','text-white','border-blue-600');
+      b.classList.remove('hover:bg-slate-50','border-slate-300');
+    } else {
+      b.classList.remove('bg-blue-600','text-white','border-blue-600');
+      b.classList.add('hover:bg-slate-50','border-slate-300');
+    }
+  });
+  if (model === 'gpt-image-2-official'){
+    $('#officialFields').classList.remove('hidden');
+    $('#officialFields').classList.add('grid');
+    $('#fallbackWrap').classList.add('hidden');
+    $('#n').max = 4;
+    $('#nHint').textContent = '官方通道 1-4 张';
+    $('#modelHint').textContent = 'OpenAI 官方 gpt-image-2，支持 quality / 输出格式 / mask 局部重绘 / n=1-4。';
+  } else {
+    $('#officialFields').classList.add('hidden');
+    $('#officialFields').classList.remove('grid');
+    $('#fallbackWrap').classList.remove('hidden');
+    $('#n').max = 1;
+    $('#n').value = 1;
+    $('#nHint').textContent = '普通通道仅 1';
+    $('#modelHint').textContent = 'APIMart 中转 gpt-image-2，文生图 / 图生图，n 仅 1。';
+  }
+  if (typeof renderCostEstimate === 'function') renderCostEstimate();
+}
+
+/* ============================================================
+ *  REFERENCE IMAGES
+ * ========================================================== */
+function renderRefList(){
+  const list = $('#refList');
+  $('#refCount').textContent = `${state.refImages.length} / ${MAX_REF_IMAGES}`;
+  if (typeof maskEditor !== 'undefined' && maskEditor.initialized) maskEditor.updateRefImageButton();
+  if (state.refImages.length === 0){
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = state.refImages.map(r => `
+    <div class="ref-thumb relative group rounded-lg overflow-hidden border border-slate-200 bg-slate-50" title="${escapeHtml(r.name)}">
+      <img src="${r.isUrl ? escapeHtml(r.url) : r.dataUri}" class="w-full aspect-square object-cover" />
+      <button data-rm="${r.id}" class="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 text-white text-xs leading-none hover:bg-red-600 flex items-center justify-center" title="移除">×</button>
+      <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent text-white text-[10px] px-1.5 py-1 truncate">
+        ${r.isUrl ? 'URL' : fmtBytes(r.sizeBytes)}
+      </div>
+    </div>
+  `).join('');
+  list.onclick = (e) => {
+    const btn = e.target.closest('[data-rm]');
+    if (!btn) return;
+    state.refImages = state.refImages.filter(r => r.id !== btn.dataset.rm);
+    renderRefList();
+  };
+}
+
+async function addRefFiles(files){
+  const remaining = MAX_REF_IMAGES - state.refImages.length;
+  if (remaining <= 0){ toast(`参考图最多 ${MAX_REF_IMAGES} 张`, 'warn'); return; }
+  const list = Array.from(files).slice(0, remaining);
+  for (const f of list){
+    if (!f.type.startsWith('image/')){ toast(`已跳过非图片：${f.name}`, 'warn'); continue; }
+    try {
+      const dataUri = await fileToDataUri(f);
+      state.refImages.push({ id: uid('ref'), name: f.name, dataUri, isUrl: false, sizeBytes: f.size });
+    } catch(e){ toast(`读取失败：${f.name}`, 'error'); }
+  }
+  renderRefList();
+}
+
+function addRefUrl(url){
+  if (!url) return;
+  if (state.refImages.length >= MAX_REF_IMAGES){ toast(`参考图最多 ${MAX_REF_IMAGES} 张`, 'warn'); return; }
+  if (!/^(https?:\/\/|data:image)/i.test(url)){ toast('URL 需以 http(s):// 或 data:image 开头', 'warn'); return; }
+  state.refImages.push({ id: uid('ref'), name: 'URL', url, isUrl: true });
+  renderRefList();
+  $('#urlInput').value = '';
+}
+
+/* ============================================================
+ *  MASK 上传
+ * ========================================================== */
+async function loadMaskFile(file){
+  if (!file.type.startsWith('image/')){ toast('mask 必须是图片', 'warn'); return; }
+  if (!/png|webp/i.test(file.type)){
+    toast('提示：mask 推荐 PNG 带 Alpha 通道，其它格式可能无法识别透明区', 'warn', 5000);
+  }
+  try {
+    const dataUri = await fileToDataUri(file);
+    // 测量尺寸
+    const dim = await new Promise((res) => {
+      const img = new Image();
+      img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = () => res({ w: null, h: null });
+      img.src = dataUri;
+    });
+    state.maskFile = { name: file.name, dataUri, w: dim.w, h: dim.h, sizeBytes: file.size };
+    $('#maskUrl').value = `[本地文件：${file.name}]`;
+    $('#maskThumb').src = dataUri;
+    $('#maskName').textContent = file.name;
+    let meta = `${fmtBytes(file.size)}`;
+    if (dim.w && dim.h) meta += ` · ${dim.w}×${dim.h} px`;
+    // 提示尺寸是否匹配第 1 张参考图
+    const r0 = state.refImages[0];
+    if (r0 && !r0.isUrl && r0.dataUri){
+      const refDim = await new Promise(res => {
+        const img = new Image();
+        img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = () => res({ w: null, h: null });
+        img.src = r0.dataUri;
+      });
+      if (refDim.w && (refDim.w !== dim.w || refDim.h !== dim.h)){
+        meta += ` · <span class="text-amber-600">⚠ 与参考图 ${refDim.w}×${refDim.h} 尺寸不一致</span>`;
+      }
+    }
+    $('#maskMeta').innerHTML = meta;
+    $('#maskPreview').classList.remove('hidden');
+    toast(`mask 已加载：${file.name}`, 'success');
+  } catch(e){
+    toast(`mask 读取失败：${e.message}`, 'error');
+  }
+  $('#maskFileInput').value = '';
+}
+
+function clearMaskFile(){
+  state.maskFile = null;
+  $('#maskUrl').value = '';
+  $('#maskPreview').classList.add('hidden');
+  $('#maskFileInput').value = '';
+}
+
+/* ============================================================
+ *  余额查询 + 价格估算
+ * ========================================================== */
+async function refreshBalance(silent=false){
+  if (!state.apiKey){
+    state.balance.user = null; state.balance.token = null; state.balance.unlimited = false;
+    renderBalance();
+    return;
+  }
+  if (state.balance.loading) return;
+  state.balance.loading = true;
+  if (!silent) renderBalance();
+  const headers = { 'Authorization': `Bearer ${state.apiKey}` };
+  // 两个端点并发查询：/v1/user/balance 用户级，/v1/balance 当前 Key 级
+  try {
+    const [uResp, tResp] = await Promise.allSettled([
+      fetch(`${state.baseUrl}/user/balance`, { headers }).then(r => r.json()),
+      fetch(`${state.baseUrl}/balance`,      { headers }).then(r => r.json())
+    ]);
+    const u = uResp.status === 'fulfilled' ? uResp.value : null;
+    const t = tResp.status === 'fulfilled' ? tResp.value : null;
+    if (u?.success){
+      state.balance.unlimited = !!u.unlimited_quota;
+      state.balance.user = u.unlimited_quota ? null : Number(u.remain_balance);
+      state.balance.userUsed = u.unlimited_quota ? null : Number(u.used_balance);
+    } else if (u?.message){
+      if (!silent) toast(`用户余额查询失败：${u.message}`, 'warn');
+    }
+    if (t?.success){
+      state.balance.token = t.unlimited_quota ? null : Number(t.remain_balance);
+      state.balance.tokenUsed = t.unlimited_quota ? null : Number(t.used_balance);
+    }
+    state.balance.lastUpdate = Date.now();
+  } catch(e){
+    if (!silent) toast(`余额查询失败：${e.message}`, 'error');
+  } finally {
+    state.balance.loading = false;
+    renderBalance();
+    renderCostEstimate();
+  }
+}
+
+let _balanceRefreshTimer = null;
+function refreshBalanceDebounced(){
+  if (_balanceRefreshTimer) clearTimeout(_balanceRefreshTimer);
+  _balanceRefreshTimer = setTimeout(() => refreshBalance(true), BALANCE_REFRESH_DEBOUNCE_MS);
+}
+
+// 估算单张图价格。优先级：学习均值 > 默认值
+function estimatePerImage(model, resolution, quality){
+  const q = (model === 'gpt-image-2-official') ? (quality || 'auto') : 'default';
+  const key = `${model}|${resolution}|${q}`;
+  const learned = state.priceLearned[key];
+  if (learned && learned.samples > 0){
+    return { price: learned.avg, source: 'learned', samples: learned.samples };
+  }
+  const def = DEFAULT_PRICES[model]?.[resolution]?.[q] ?? DEFAULT_PRICES[model]?.[resolution]?.default;
+  if (def != null) return { price: def, source: 'default' };
+  return { price: null, source: 'unknown' };
+}
+
+// 任务完成后吸取真实价格
+function recordActualCost(task){
+  if (task.cost == null || !Number.isFinite(task.cost) || task.cost <= 0) return;
+  const n = task.n || 1;
+  const perImg = task.cost / n;
+  const model = task.model;
+  const resolution = task.resolution;
+  // 推断当时使用的 quality
+  let q = 'default';
+  if (model === 'gpt-image-2-official') q = task.body?.quality || 'auto';
+  // 从像素串推断 resolution 档位（custom 模式下 resolution 仍是档位，不需特殊处理）
+  const tier = /^(1k|2k|4k)$/.test(resolution) ? resolution
+             : (resolution || '').toLowerCase();
+  const key = `${model}|${tier}|${q}`;
+  if (!state.priceLearned[key]){
+    state.priceLearned[key] = { samples: 0, total: 0, avg: 0, lastSeen: 0 };
+  }
+  const slot = state.priceLearned[key];
+  slot.samples++;
+  slot.total += perImg;
+  slot.avg = slot.total / slot.samples;
+  slot.lastSeen = Date.now();
+  savePrices();
+}
+
+function renderBalance(){
+  const el = $('#balanceDisplay');
+  if (!el) return;
+  if (!state.apiKey){ el.innerHTML = ''; return; }
+  if (state.balance.loading){
+    el.innerHTML = `<span class="text-xs text-slate-400 animate-pulse">余额加载中…</span>`;
+    return;
+  }
+  if (state.balance.unlimited){
+    el.innerHTML = `<span class="text-xs text-emerald-600">⚡ 无限额度</span> <button id="btnRefreshBalance" class="text-slate-400 hover:text-slate-700" title="刷新">🔄</button>`;
+    return;
+  }
+  if (state.balance.user == null){
+    el.innerHTML = `<button id="btnRefreshBalance" class="text-xs text-slate-500 hover:text-slate-700 underline">查询余额</button>`;
+    return;
+  }
+  const u = state.balance.user;
+  const t = state.balance.token;
+  const cls = u < 0.5 ? 'text-red-600' : u < 5 ? 'text-amber-600' : 'text-emerald-700';
+  let tokenStr = '';
+  if (t != null && Math.abs(t - u) > 0.001) tokenStr = ` <span class="text-slate-400">· Key $${t.toFixed(3)}</span>`;
+  el.innerHTML = `
+    <span class="text-xs ${cls} font-medium">余额 $${u.toFixed(3)}</span>
+    ${tokenStr}
+    <button id="btnRefreshBalance" class="ml-1 text-slate-400 hover:text-slate-700" title="刷新余额">🔄</button>
+  `;
+}
+
+function renderCostEstimate(){
+  const el = $('#costEstimate');
+  if (!el) return;
+  let r;
+  try { r = resolvedSize(); } catch { el.innerHTML = ''; return; }
+  const model = state.model;
+  const quality = (model === 'gpt-image-2-official') ? $('#quality').value : 'default';
+  const n = Math.max(1, parseInt($('#n').value || '1', 10));
+  const batch = Math.max(1, parseInt($('#batchCount').value || '1', 10));
+  const tier = /^(1k|2k|4k)$/.test(r.resolution) ? r.resolution : (r.resolution || '').toLowerCase();
+  const est = estimatePerImage(model, tier, quality);
+
+  if (est.price == null){
+    el.innerHTML = `<span class="text-slate-400">💰 该组合价格未知（提交一次后会自动从 cost 字段学习）</span>`;
+    return;
+  }
+
+  const perTask = est.price * n;
+  const total = perTask * batch;
+
+  const sourceLabel = est.source === 'learned'
+    ? `<span class="text-emerald-600" title="基于 ${est.samples} 次实际任务的均值">实测均值 (${est.samples})</span>`
+    : `<span class="text-slate-400" title="参考值；任务完成后会自动校准">参考值</span>`;
+
+  let warn = '';
+  if (state.balance.user != null && !state.balance.unlimited){
+    if (total > state.balance.user){
+      warn = `<span class="text-red-600 font-medium">⚠ 超出余额 $${state.balance.user.toFixed(3)}！会触发 quota not enough</span>`;
+    } else {
+      const after = state.balance.user - total;
+      const possible = Math.floor(state.balance.user / Math.max(perTask, 1e-9));
+      warn = `<span class="text-slate-500">提交后约剩 $${after.toFixed(3)} · 余额够再做约 ${possible} 次同等任务</span>`;
+    }
+  }
+
+  const detail = `${batch} 任务${n>1 ? ` × ${n} 张` : ''} × $${est.price.toFixed(4)}`;
+  el.innerHTML = `
+    <div class="flex items-center justify-between gap-2 flex-wrap">
+      <div>
+        <span class="text-slate-700 font-medium">💰 预估 $${total.toFixed(4)}</span>
+        <span class="text-slate-500 text-[11px]">= ${detail}</span>
+        ${sourceLabel}
+      </div>
+    </div>
+    ${warn ? `<div class="text-[11px] mt-0.5">${warn}</div>` : ''}
+  `;
+}
+
+function renderPriceTable(){
+  const el = $('#priceTable');
+  if (!el) return;
+  const rows = [];
+  // 中转
+  for (const tier of ['1k','2k','4k']){
+    const def = DEFAULT_PRICES['gpt-image-2'][tier].default;
+    const learned = state.priceLearned[`gpt-image-2|${tier}|default`];
+    rows.push({ model: 'gpt-image-2', tier, quality: '—', def, learned });
+  }
+  // 官方
+  for (const tier of ['1k','2k','4k']){
+    for (const q of ['auto','low','medium','high']){
+      const def = DEFAULT_PRICES['gpt-image-2-official'][tier][q];
+      const learned = state.priceLearned[`gpt-image-2-official|${tier}|${q}`];
+      rows.push({ model: 'gpt-image-2-official', tier, quality: q, def, learned });
+    }
+  }
+  el.innerHTML = `
+    <table class="w-full text-[11px]">
+      <thead class="text-slate-500">
+        <tr><th class="text-left p-1">model</th><th class="text-left p-1">tier</th><th class="text-left p-1">quality</th><th class="text-right p-1">参考价 / 张</th><th class="text-right p-1">实测均值 (n)</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr class="border-t border-slate-100">
+            <td class="p-1 font-mono">${r.model.replace('gpt-image-2','gi2')}</td>
+            <td class="p-1">${r.tier.toUpperCase()}</td>
+            <td class="p-1">${r.quality}</td>
+            <td class="p-1 text-right text-slate-600 font-mono">$${r.def.toFixed(4)}</td>
+            <td class="p-1 text-right ${r.learned?'text-emerald-700 font-mono':'text-slate-300'}">${r.learned ? '$'+r.learned.avg.toFixed(4)+' ('+r.learned.samples+')' : '—'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/* ============================================================
+ *  BUILD REQUEST BODY
+ * ========================================================== */
+function buildBody(){
+  const model = state.model;
+  const prompt = $('#prompt').value.trim();
+  const n = parseInt($('#n').value || '1', 10);
+
+  if (!prompt) throw new Error('请填写 prompt');
+  if (!state.apiKey) throw new Error('请先在「设置」里配置 API Key');
+
+  // 解析「具体像素」选择器
+  const r = resolvedSize();
+  const ratioInDropdown = $('#size').value;
+
+  if (r.mode === 'auto'){
+    // 自动模式：4K 限制
+    if (r.resolution === '4k' && ratioInDropdown !== 'auto' && !SIZE_PIXEL_MAP[ratioInDropdown]?.['4k']){
+      throw new Error(`比例 ${ratioInDropdown} 不支持 4K，请改成 16:9 / 9:16 / 2:1 / 1:2 / 21:9 / 9:21，或在「具体像素」里选预设/自定义`);
+    }
+  } else if (r.mode === 'custom'){
+    if (!r.w || !r.h) throw new Error('请填写自定义像素的宽和高');
+    if (r.w < 64 || r.h < 64) throw new Error('宽高最小 64 px');
+    const total = r.w * r.h, longEdge = Math.max(r.w, r.h);
+    if (total > 8294400) throw new Error(`总像素 ${(total/1e6).toFixed(2)}MP 超过 OpenAI 上限 8.29MP`);
+    if (longEdge > 3840) throw new Error(`长边 ${longEdge}px 超过 3840px 上限`);
+  }
+
+  const body = { model, prompt, n };
+  body.size = r.size;          // 可能是 "16:9" 或 "1536x1024" 或 "auto"
+  body.resolution = r.resolution;
+
+  // refs
+  if (state.refImages.length > 0){
+    body.image_urls = state.refImages.map(r => r.isUrl ? r.url : r.dataUri);
+  }
+
+  if (model === 'gpt-image-2-official'){
+    body.quality = $('#quality').value;
+    const bg = $('#background').value; if (bg && bg !== 'auto') body.background = bg; else body.background = 'auto';
+    const mod = $('#moderation').value; body.moderation = mod;
+    const fmt = $('#outputFormat').value; if (fmt) body.output_format = fmt;
+    const comp = $('#outputCompression').value;
+    if (comp !== '' && !isNaN(parseInt(comp))) body.output_compression = parseInt(comp);
+    // mask: 优先用本地上传的 dataUri，否则用输入框里的 URL
+    let mask = '';
+    if (state.maskFile){
+      mask = state.maskFile.dataUri;
+    } else {
+      const v = $('#maskUrl').value.trim();
+      if (v && !v.startsWith('[本地文件')) mask = v;
+    }
+    if (mask){
+      body.mask_url = mask;
+      if (state.refImages.length === 0){
+        throw new Error('mask 必须搭配至少 1 张参考图，请先上传参考图');
+      }
+    }
+    if (n < 1 || n > 4) throw new Error('官方通道 n 需在 1-4');
+  } else {
+    body.official_fallback = $('#officialFallback').value === 'true';
+    if (n !== 1) body.n = 1;
+  }
+  return body;
+}
+
+/* ============================================================
+ *  TASK MANAGEMENT
+ * ========================================================== */
+function addTask(body){
+  const t = {
+    id: uid('task'),
+    apiTaskId: null,
+    status: 'pending',          // pending | submitting | submitted | processing | completed | failed | cancelled
+    progress: 0,
+    model: body.model,
+    prompt: body.prompt,
+    size: body.size,
+    resolution: body.resolution,
+    n: body.n,
+    refCount: (body.image_urls||[]).length,
+    body,                       // request body for retry
+    createdAt: Date.now(),
+    submittedAt: null,
+    completedAt: null,
+    images: [],                 // [{url, expiresAt}]
+    error: null,                // {code, message, type}
+    retryCount: 0,
+    pollCount: 0,
+    actualTime: null,
+    estimatedTime: null,
+    cost: null,
+    // 此任务的重试覆盖：null 表示跟随全局；否则 {mode, count, duration, interval, skip4xx}
+    retryOverride: null,
+    autoRetryCount: 0,
+    firstFailedAt: null,
+    nextRetryAt: null,
+    collapsed: false
+  };
+  state.tasks.unshift(t);
+  state.pendingQueue.push(t);
+  renderTasks();
+  pumpQueue();
+  return t;
+}
+
+function pumpQueue(){
+  while (state.activeCount < state.concurrency && state.pendingQueue.length){
+    const t = state.pendingQueue.shift();
+    state.activeCount++;
+    submitTask(t).finally(() => {
+      // activeCount decremented when task completes/fails
+    });
+  }
+}
+
+async function submitTask(t){
+  t.status = 'submitting';
+  renderTaskRow(t);
+  try {
+    const resp = await fetch(`${state.baseUrl}/images/generations`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${state.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(t.body)
+    });
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { _raw: text }; }
+    if (!resp.ok){
+      const msg = data?.error?.message || data?.message || data?._raw || `HTTP ${resp.status}`;
+      throw Object.assign(new Error(msg), { code: data?.code || resp.status, type: data?.error?.type, raw: data });
+    }
+    const taskId = data?.data?.[0]?.task_id || data?.data?.task_id || data?.task_id;
+    if (!taskId) throw new Error('提交成功但未返回 task_id：' + (text.slice(0,200)));
+    t.apiTaskId = taskId;
+    t.status = 'submitted';
+    t.submittedAt = Date.now();
+    renderTaskRow(t);
+    startPollTicker();
+  } catch(err){
+    handleTaskFailure(t, err);
+    state.activeCount--;
+    pumpQueue();
+  }
+}
+
+/* ============================================================
+ *  批量轮询：单个全局 ticker，每 4s 调一次 POST /v1/tasks/batch
+ *  把所有进行中任务的状态一次性拉回来，分发更新到各任务。
+ *  若 batch 接口不可用（404 或返回格式不符），自动回退到逐个 GET /v1/tasks/{id}。
+ * ========================================================== */
+let _batchTickerHandle = null;
+let _pollInFlight = false;
+let _batchEndpointSupported = null; // null=未知; true=支持; false=回退到单查询
+
+function clearTaskTimer(t){ /* no-op：保留接口兼容，per-task 定时器已废弃 */ }
+
+function startPollTicker(){
+  if (_batchTickerHandle || _pollInFlight) return;
+  _batchTickerHandle = setTimeout(pollTick, 1000);
+}
+
+function hasActivePolling(){
+  return state.tasks.some(t =>
+    ['submitted','processing','submitting','pending','retrying'].includes(t.status));
+}
+
+async function pollTick(){
+  if (_pollInFlight) return;
+  _pollInFlight = true;
+  _batchTickerHandle = null;
+  try {
+    const now = Date.now();
+
+    // 超时回收
+    for (const t of state.tasks){
+      if (['submitted','processing'].includes(t.status) && t.submittedAt && (now - t.submittedAt) > POLL_TIMEOUT_MS){
+        handleTaskFailure(t, Object.assign(new Error('轮询超时（>8 分钟）'), {code:'TIMEOUT'}));
+        state.activeCount--;
+        pumpQueue();
+      }
+    }
+
+    // 选出可以查询的任务
+    const candidates = state.tasks.filter(t => {
+      if (!t.apiTaskId) return false;
+      if (!['submitted','processing'].includes(t.status)) return false;
+      // 首次轮询延迟
+      if (t.pollCount === 0 && t.submittedAt && (now - t.submittedAt) < POLL_FIRST_DELAY_MS) return false;
+      return true;
+    });
+
+    if (candidates.length === 0) return; // finally 会重排
+
+    // 尝试批量
+    let usedBatch = false;
+    if (_batchEndpointSupported !== false){
+      usedBatch = await tryBatchPoll(candidates);
+      // tryBatchPoll 返回 true 表示已处理（成功或临时错误），false 表示需要回退
+    }
+    if (!usedBatch || _batchEndpointSupported === false){
+      // 单任务回退
+      await Promise.all(candidates.map(t => pollOne(t)));
+    }
+  } finally {
+    _pollInFlight = false;
+    if (hasActivePolling()){
+      _batchTickerHandle = setTimeout(pollTick, POLL_INTERVAL_MS);
+    }
+  }
+}
+
+async function tryBatchPoll(candidates){
+  try {
+    const task_ids = candidates.map(t => t.apiTaskId);
+    const resp = await fetch(`${state.baseUrl}/tasks/batch?language=zh`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${state.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ task_ids })
+    });
+    if (resp.status === 404 || resp.status === 405){
+      if (_batchEndpointSupported !== false){
+        _batchEndpointSupported = false;
+        toast('批量查询接口不可用，已切回单任务查询', 'warn');
+      }
+      return false;
+    }
+    const text = await resp.text();
+    let payload; try { payload = JSON.parse(text); } catch { payload = null; }
+
+    if (!resp.ok){
+      // 429 / 5xx：所有候选 pollCount++ 等下次 tick
+      if (resp.status === 429 || resp.status >= 500){
+        candidates.forEach(t => t.pollCount++);
+        return true;
+      }
+      // 401/402/403：让单任务模式来处理（会给每个任务展示错误）
+      _batchEndpointSupported = false;
+      return false;
+    }
+
+    // 提取返回数组（兼容多种形态）
+    let arr = null;
+    if (Array.isArray(payload?.data)) arr = payload.data;
+    else if (Array.isArray(payload?.tasks)) arr = payload.tasks;
+    else if (Array.isArray(payload)) arr = payload;
+    else if (payload?.data && typeof payload.data === 'object') arr = Object.values(payload.data);
+
+    if (!arr || arr.length === 0){
+      if (_batchEndpointSupported !== false){
+        _batchEndpointSupported = false;
+        toast('批量查询返回格式不符，已切回单任务查询', 'warn');
+      }
+      return false;
+    }
+
+    _batchEndpointSupported = true;
+    const byId = {};
+    for (const obj of arr){
+      const id = obj?.id || obj?.task_id;
+      if (id) byId[id] = obj;
+    }
+    for (const t of candidates){
+      t.pollCount++;
+      const d = byId[t.apiTaskId];
+      if (d) applyTaskUpdate(t, d);
+    }
+    return true;
+  } catch(err){
+    // 网络错误：所有任务 pollCount++, 等下次 tick
+    candidates.forEach(t => t.pollCount++);
+    return true;
+  }
+}
+
+async function pollOne(t){
+  try {
+    const resp = await fetch(`${state.baseUrl}/tasks/${encodeURIComponent(t.apiTaskId)}?language=zh`, {
+      headers: { 'Authorization': `Bearer ${state.apiKey}` }
+    });
+    t.pollCount++;
+    const text = await resp.text();
+    let data; try { data = JSON.parse(text); } catch { data = { _raw: text }; }
+    if (!resp.ok){
+      if (resp.status === 429 || resp.status >= 500) return; // 等下次 tick
+      // 4xx：连续 3 次就判失败
+      if (t.pollCount >= 3){
+        handleTaskFailure(t, Object.assign(
+          new Error(data?.error?.message || data?.message || `HTTP ${resp.status}`),
+          { code: data?.code || resp.status }
+        ));
+        state.activeCount--;
+        pumpQueue();
+      }
+      return;
+    }
+    const d = data?.data || data;
+    applyTaskUpdate(t, d);
+  } catch(err){
+    if (t.pollCount >= 5){
+      handleTaskFailure(t, err);
+      state.activeCount--;
+      pumpQueue();
+    }
+  }
+}
+
+function applyTaskUpdate(t, d){
+  if (!d) return;
+  const status = d?.status;
+  t.progress = typeof d?.progress === 'number' ? d.progress : t.progress;
+  t.estimatedTime = d?.estimated_time ?? t.estimatedTime;
+
+  if (status === 'completed'){
+    t.status = 'completed';
+    t.completedAt = Date.now();
+    t.actualTime = d?.actual_time;
+    t.cost = d?.cost;
+    const imgs = d?.result?.images || [];
+    t.images = imgs.flatMap(img => {
+      const urls = Array.isArray(img.url) ? img.url : [img.url];
+      return urls.filter(Boolean).map(u => ({ url: u, expiresAt: img.expires_at }));
+    });
+    recordActualCost(t);
+    renderCostEstimate();
+    renderPriceTable();
+    refreshBalanceDebounced();
+    renderTaskRow(t);
+    state.activeCount--;
+    pumpQueue();
+    return;
+  }
+  if (status === 'failed'){
+    handleTaskFailure(t, {
+      message: d?.error?.message || '任务失败',
+      code: d?.error?.code,
+      type: d?.error?.type
+    });
+    state.activeCount--;
+    pumpQueue();
+    return;
+  }
+  if (status === 'cancelled'){
+    t.status = 'cancelled';
+    renderTaskRow(t);
+    state.activeCount--;
+    pumpQueue();
+    return;
+  }
+  // pending / processing / submitted / in_progress
+  t.status = (status === 'submitted') ? 'submitted' : 'processing';
+  renderTaskRow(t);
+}
+
+function handleTaskFailure(t, err){
+  t.completedAt = Date.now();
+  let message = err?.message || '未知错误';
+  // CORS 嗅探
+  if (/Failed to fetch|NetworkError|TypeError/.test(message)){
+    message = `网络错误（可能是 CORS 被浏览器拦截）：${message}`;
+  }
+  t.error = {
+    code: err?.code ?? '—',
+    message,
+    type: err?.type
+  };
+  if (!t.firstFailedAt) t.firstFailedAt = Date.now();
+
+  // 决定是否自动重试
+  const decision = shouldAutoRetry(t);
+  if (decision.retry){
+    const r = effectiveRetry(t);
+    t.autoRetryCount = (t.autoRetryCount || 0) + 1;
+    t.status = 'retrying';
+    t.nextRetryAt = Date.now() + r.interval * 1000;
+    renderTaskRow(t);
+    const handle = setTimeout(() => {
+      state.retryTimers.delete(t.id);
+      // 重置任务，重新走提交流程
+      t.status = 'pending';
+      t.apiTaskId = null;
+      t.progress = 0;
+      t.submittedAt = null;
+      t.completedAt = null;
+      t.actualTime = null;
+      t.images = [];
+      t.pollCount = 0;
+      // error 保留作为上次失败痕迹，等下次提交开始时清掉
+      state.pendingQueue.push(t);
+      renderTaskRow(t);
+      pumpQueue();
+    }, r.interval * 1000);
+    state.retryTimers.set(t.id, handle);
+    return;
+  }
+
+  // 终态失败
+  t.status = 'failed';
+  if (decision.reason) t.error.skipReason = decision.reason;
+  renderTaskRow(t);
+}
+
+// 取得此任务实际生效的重试配置：覆盖优先，否则全局
+function effectiveRetry(t){
+  return t?.retryOverride || state.retry;
+}
+
+function describeRetry(r){
+  const map = { off: '关闭', count: `按次数 ${r.count} 次`, duration: `按时长 ${r.duration} 分`, forever: '直到成功' };
+  return `${map[r.mode] || r.mode}${r.mode!=='off' ? ` · 间隔 ${r.interval}s` : ''}${r.skip4xx?' · 跳过 4xx':''}`;
+}
+
+// 返回 {retry: bool, reason?: string}
+function shouldAutoRetry(t){
+  const r = effectiveRetry(t);
+  if (r.mode === 'off') return { retry: false, reason: t.retryOverride ? '此任务已停止重试' : '自动重试已关闭' };
+
+  // 注：内容审核 / 安全策略类失败也会重试 —— 实测多试几次往往能过。
+  // 如果确认 prompt 有问题，请直接关闭自动重试或点「停止」。
+
+  // 可选：4xx 参数错误跳过（429 / 408 例外）
+  if (r.skip4xx){
+    const code = t.error?.code;
+    let n = null;
+    if (typeof code === 'number') n = code;
+    else if (typeof code === 'string' && /^\d+$/.test(code)) n = parseInt(code, 10);
+    if (n != null && n >= 400 && n < 500 && n !== 429 && n !== 408){
+      return { retry: false, reason: `HTTP ${n}（4xx 参数错误，已跳过）` };
+    }
+  }
+
+  // 超时类（自定义 TIMEOUT）也跳过
+  if (t.error?.code === 'TIMEOUT') return { retry: true };
+
+  if (r.mode === 'count'){
+    const used = t.autoRetryCount || 0;
+    if (used >= r.count) return { retry: false, reason: `已重试 ${used}/${r.count} 次，达上限` };
+    return { retry: true };
+  }
+  if (r.mode === 'duration'){
+    const ddl = (t.firstFailedAt || Date.now()) + r.duration * 60 * 1000;
+    if (Date.now() >= ddl) return { retry: false, reason: `重试已超时长（${r.duration} 分钟）` };
+    return { retry: true };
+  }
+  if (r.mode === 'forever') return { retry: true };
+  return { retry: false };
+}
+
+function clearRetryTimer(t){
+  const h = state.retryTimers.get(t.id);
+  if (h){ clearTimeout(h); state.retryTimers.delete(t.id); }
+}
+
+function retryTask(t){
+  if (t.status !== 'failed' && t.status !== 'retrying') return;
+  clearRetryTimer(t);
+  t.retryCount = (t.retryCount || 0) + 1;
+  t.status = 'pending';
+  t.error = null;
+  t.apiTaskId = null;
+  t.progress = 0;
+  t.submittedAt = null;
+  t.completedAt = null;
+  t.actualTime = null;
+  t.firstFailedAt = null;
+  t.autoRetryCount = 0;
+  t.images = [];
+  state.pendingQueue.push(t);
+  renderTaskRow(t);
+  pumpQueue();
+}
+
+// 用户主动取消「等待重试」状态，转为最终失败
+function cancelRetry(t){
+  if (t.status !== 'retrying') return;
+  clearRetryTimer(t);
+  t.status = 'failed';
+  renderTaskRow(t);
+}
+
+/* ============================================================
+ *  任务级重试设置 Modal
+ * ========================================================== */
+let _modalTaskId = null;
+
+function openTaskRetryModal(t){
+  _modalTaskId = t.id;
+  const r = t.retryOverride || state.retry;
+  $('#taskRetryModalTaskName').textContent = (t.prompt||'').slice(0, 80) + ((t.prompt||'').length > 80 ? '…' : '');
+  $('#taskRetryUseOverride').checked = !!t.retryOverride;
+  $('#taskRetryFields').classList.toggle('hidden', !t.retryOverride);
+  $('#taskRetryMode').value = r.mode;
+  $('#taskRetryCount').value = r.count;
+  $('#taskRetryDuration').value = r.duration;
+  $('#taskRetryInterval').value = r.interval;
+  $('#taskRetrySkip4xx').checked = !!r.skip4xx;
+  $('#taskRetryCountWrap').classList.toggle('hidden', r.mode !== 'count');
+  $('#taskRetryDurationWrap').classList.toggle('hidden', r.mode !== 'duration');
+  $('#taskRetryUsed').textContent = t.autoRetryCount || 0;
+  $('#taskRetryGlobalDesc').textContent = describeRetry(state.retry);
+  $('#taskRetryModal').classList.remove('hidden');
+}
+
+function closeTaskRetryModal(){
+  $('#taskRetryModal').classList.add('hidden');
+  _modalTaskId = null;
+}
+
+function saveTaskRetry(){
+  const t = state.tasks.find(x => x.id === _modalTaskId);
+  if (!t){ closeTaskRetryModal(); return; }
+  const useOverride = $('#taskRetryUseOverride').checked;
+  if (!useOverride){
+    t.retryOverride = null;
+  } else {
+    t.retryOverride = {
+      mode: $('#taskRetryMode').value,
+      count: Math.max(1, Math.min(100, parseInt($('#taskRetryCount').value, 10) || 3)),
+      duration: Math.max(1, Math.min(1440, parseInt($('#taskRetryDuration').value, 10) || 10)),
+      interval: Math.max(1, Math.min(600, parseInt($('#taskRetryInterval').value, 10) || 5)),
+      skip4xx: $('#taskRetrySkip4xx').checked
+    };
+  }
+  // 如果当前正在 retrying 且新生效模式是 off，立刻取消等待
+  if (t.status === 'retrying' && effectiveRetry(t).mode === 'off'){
+    cancelRetry(t);
+  } else {
+    renderTaskRow(t);
+  }
+  closeTaskRetryModal();
+  toast('已更新此任务的重试设置', 'success');
+}
+
+function stopThisTaskRetry(){
+  const t = state.tasks.find(x => x.id === _modalTaskId);
+  if (!t){ closeTaskRetryModal(); return; }
+  // 写一个 mode=off 的覆盖，避免后续失败再触发自动重试
+  t.retryOverride = { ...(t.retryOverride || state.retry), mode: 'off' };
+  if (t.status === 'retrying') cancelRetry(t);
+  else renderTaskRow(t);
+  closeTaskRetryModal();
+  toast('已停止此任务的自动重试', 'success');
+}
+
+function removeTask(t){
+  clearTaskTimer(t);
+  clearRetryTimer(t);
+  state.tasks = state.tasks.filter(x => x.id !== t.id);
+  state.pendingQueue = state.pendingQueue.filter(x => x.id !== t.id);
+  pruneSelectedImages();
+  renderTasks();
+}
+
+/* ============================================================
+ *  RENDER
+ * ========================================================== */
+function renderTasks(){
+  const list = $('#tasksList');
+  $('#tasksEmpty').classList.toggle('hidden', state.tasks.length > 0);
+  list.innerHTML = state.tasks.map(taskHTML).join('');
+  bindTaskRowEvents();
+  updateQueueStat();
+}
+
+function renderTaskRow(t){
+  const row = document.querySelector(`[data-task-id="${t.id}"]`);
+  if (!row){ renderTasks(); return; }
+  row.outerHTML = taskHTML(t);
+  bindTaskRowEvents();
+  updateQueueStat();
+}
+
+function updateQueueStat(){
+  const counts = {pending:0, submitting:0, submitted:0, processing:0, completed:0, failed:0, retrying:0, cancelled:0};
+  state.tasks.forEach(t => counts[t.status] = (counts[t.status]||0)+1);
+  const inflight = counts.submitting+counts.submitted+counts.processing;
+  const retryStr = counts.retrying ? ` · 等待重试 ${counts.retrying}` : '';
+  $('#queueStat').textContent = `共 ${state.tasks.length} · 进行中 ${inflight} · 完成 ${counts.completed} · 失败 ${counts.failed}${retryStr}`;
+}
+
+function badgeFor(status, t){
+  const labels = {pending:'排队中', submitting:'提交中', submitted:'已提交', processing:'生成中', completed:'已完成', failed:'失败', retrying:'等待重试', cancelled:'已取消'};
+  let suffix = '';
+  if (status === 'retrying' && t){
+    const r = effectiveRetry(t);
+    const used = t.autoRetryCount || 0;
+    if (r.mode === 'count') suffix = ` ${used}/${r.count}`;
+    else if (r.mode === 'duration') suffix = ` #${used}`;
+    else if (r.mode === 'forever') suffix = ` #${used}`;
+  }
+  return `<span class="badge badge-${status}">${labels[status]||status}${suffix}</span>`;
+}
+
+function taskHTML(t){
+  const elapsedSec = elapsed(t.submittedAt || t.createdAt, t.completedAt);
+  const showProgress = ['submitted','submitting','processing','pending'].includes(t.status);
+  const progressPct = t.status === 'completed' ? 100 : (t.progress || (t.status==='processing'? 30 : 5));
+
+  // 静态 grid 类（避免 Tailwind CDN 处理不到动态 sm:grid-cols-${N}）
+  let gridCols;
+  switch (t.images.length){
+    case 0: gridCols = ''; break;
+    case 1: gridCols = 'grid-cols-1'; break;
+    case 2: gridCols = 'grid-cols-2'; break;
+    case 3: gridCols = 'grid-cols-2 sm:grid-cols-3'; break;
+    default: gridCols = 'grid-cols-2 sm:grid-cols-4';
+  }
+  const imagesHtml = t.images.length === 0 ? '' : `
+    <div class="img-grid grid ${gridCols} gap-3 mt-3">
+      ${t.images.map((img, i) => {
+        const selKey = `${t.id}|${i}`;
+        const isSel = state.selectedImages.has(selKey);
+        return `
+          <div class="flex flex-col gap-1">
+            <div class="relative group">
+              <label class="absolute top-1.5 left-1.5 z-10 cursor-pointer bg-white/95 rounded p-0.5 shadow-sm hover:bg-white" title="选中加入「下载选中」">
+                <input type="checkbox" data-act="select-img" data-task="${t.id}" data-idx="${i}" class="w-4 h-4 cursor-pointer accent-blue-600 align-middle block" ${isSel ? 'checked' : ''} />
+              </label>
+              <a href="${escapeHtml(img.url)}" target="_blank" rel="noopener" class="block">
+                <img src="${escapeHtml(img.url)}" loading="lazy" style="display:block; width:100%; min-height:80px;" class="rounded-lg border border-slate-200 bg-slate-50" />
+              </a>
+              <div class="absolute bottom-1.5 right-1.5 flex gap-1">
+                <button data-act="copy-url" data-task="${t.id}" data-idx="${i}" class="px-2 py-1 text-[10px] rounded bg-black/70 text-white hover:bg-black" title="复制 URL">📋</button>
+                <button data-act="dl" data-task="${t.id}" data-idx="${i}" class="px-2 py-1 text-[10px] rounded bg-black/70 text-white hover:bg-black" title="下载">⬇</button>
+              </div>
+            </div>
+            <div class="flex items-center gap-1 text-[10px]">
+              <span class="text-slate-400 shrink-0 font-mono">#${i+1}</span>
+              <input readonly value="${escapeHtml(img.url)}" data-act="select-url" data-task="${t.id}" data-idx="${i}" class="flex-1 min-w-0 font-mono text-[10px] text-slate-600 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 cursor-pointer hover:bg-slate-100 truncate" title="点击全选" />
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  const errorBg = t.status === 'retrying' ? 'bg-violet-50 border-violet-200 text-violet-900' : 'bg-red-50 border-red-200 text-red-800';
+  const errorTitle = t.status === 'retrying' ? '🔁 上次失败，正在等待重试' : '❌ 失败';
+  let retryFooter = '';
+  if (t.status === 'retrying'){
+    const r = effectiveRetry(t);
+    const sec = Math.max(0, Math.round(((t.nextRetryAt||0) - Date.now())/1000));
+    const overrideTag = t.retryOverride ? ' <span class="text-violet-700 font-medium">[此任务覆盖]</span>' : '';
+    retryFooter = `<div class="mt-1 text-[11px] text-violet-700">将在 <span class="font-mono">${sec}s</span> 后第 ${(t.autoRetryCount||0)+1} 次重试 · 间隔 ${r.interval}s${r.mode==='count'?` · 上限 ${r.count} 次`:''}${r.mode==='duration'?` · 时长上限 ${r.duration} 分`:''}${overrideTag}</div>`;
+  } else if (t.status === 'failed' && t.error?.skipReason){
+    retryFooter = `<div class="mt-1 text-[11px] text-red-700">已跳过自动重试：${escapeHtml(t.error.skipReason)}</div>`;
+  } else if (t.status === 'failed' && (t.autoRetryCount||0) > 0){
+    retryFooter = `<div class="mt-1 text-[11px] text-red-700">已自动重试 ${t.autoRetryCount} 次后仍失败</div>`;
+  }
+  const errorHtml = t.error ? `
+    <div class="mt-2 p-2 rounded-lg ${errorBg} border text-xs">
+      <div class="flex items-center justify-between">
+        <span class="font-medium">${errorTitle}</span>
+        <span class="font-mono text-[10px] opacity-70">code: ${escapeHtml(String(t.error.code))}${t.error.type?(' · type: '+escapeHtml(t.error.type)):''}</span>
+      </div>
+      <div class="mt-1 break-words">${escapeHtml(t.error.message)}</div>
+      ${retryFooter}
+    </div>
+  ` : '';
+
+  const refsHtml = t.refCount > 0
+    ? `<span class="text-slate-500">参考图 ${t.refCount} 张</span>`
+    : '';
+
+  const costHtml = t.cost != null ? `<span class="text-slate-500">花费 $${Number(t.cost).toFixed(5)}</span>` : '';
+  const actualHtml = t.actualTime != null ? `<span class="text-slate-500">耗时 ${t.actualTime}s</span>` : (showProgress ? `<span class="text-slate-500">已用 ${elapsedSec}s</span>` : '');
+
+  // 图片 URL 失效倒计时
+  const expSec = t.images?.[0]?.expiresAt;
+  const expInfo = expSec ? expiresInfo(expSec) : null;
+  const expiresHtml = expInfo
+    ? `<span class="text-xs ${expInfo.cls}" title="完成后 24h URL 失效，建议尽快下载">⏳ URL ${expInfo.text}</span>`
+    : '';
+
+  // 预计剩余时间
+  let etaHtml = '';
+  if (showProgress && t.estimatedTime){
+    const remain = Math.max(0, t.estimatedTime - elapsedSec);
+    etaHtml = `<div class="text-[11px] text-slate-500 mt-1">预计 ${t.estimatedTime}s · 剩余 ~${remain}s</div>`;
+  }
+
+  // 折叠相关
+  const canCollapse = t.images.length > 0 || t.error || showProgress;
+  const isCollapsed = !!t.collapsed && canCollapse;
+  const thumb = (isCollapsed && t.images.length) ? `
+    <a href="${escapeHtml(t.images[0].url)}" target="_blank" rel="noopener" class="shrink-0" title="点击新标签打开大图">
+      <img src="${escapeHtml(t.images[0].url)}" class="w-10 h-10 object-cover rounded border border-slate-200 hover:opacity-80 transition" />
+    </a>
+  ` : '';
+  const extraImgCount = (isCollapsed && t.images.length > 1) ? `<span class="text-[11px] text-slate-500">+${t.images.length-1}</span>` : '';
+
+  return `
+  <article data-task-id="${t.id}" class="bg-white border border-slate-200 rounded-xl p-3">
+    <header class="flex items-start justify-between gap-2">
+      <div class="min-w-0 flex-1 flex items-start gap-2">
+        ${thumb}
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            ${badgeFor(t.status, t)}
+            ${t.retryOverride ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700" title="${escapeHtml(describeRetry(t.retryOverride))}">⚙ 重试覆盖</span>` : ''}
+            <span class="text-xs text-slate-500 font-mono">${escapeHtml(t.model)}</span>
+            <span class="text-xs text-slate-500">${escapeHtml(t.size)} · ${escapeHtml(t.resolution.toUpperCase())}${t.n>1?' · n='+t.n:''}</span>
+            ${refsHtml}
+            ${actualHtml}
+            ${costHtml}
+            ${expiresHtml}
+            ${extraImgCount}
+          </div>
+          <p class="mt-1 text-sm text-slate-800 ${isCollapsed?'line-clamp-1':'line-clamp-2'}" title="${escapeHtml(t.prompt)}">${escapeHtml(t.prompt)}</p>
+          ${(!isCollapsed && t.apiTaskId) ? `<p class="mt-0.5 text-[11px] font-mono text-slate-400 truncate">${escapeHtml(t.apiTaskId)}</p>` : ''}
+        </div>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        ${canCollapse ? `<button data-act="toggle-collapse" data-task="${t.id}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50" title="${isCollapsed?'展开':'折叠'}">${isCollapsed?'▼':'▲'}</button>` : ''}
+        ${t.status==='failed' || t.status==='retrying' ? `<button data-act="retry-config" data-task="${t.id}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50" title="此任务的重试设置">⚙</button>` : ''}
+        ${t.status==='failed' ? `<button data-act="retry" data-task="${t.id}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50">重试</button>` : ''}
+        ${t.status==='retrying' ? `<button data-act="retry-now" data-task="${t.id}" class="px-2 py-1 text-xs rounded border border-violet-300 text-violet-700 hover:bg-violet-50">立即重试</button>` : ''}
+        ${t.status==='retrying' ? `<button data-act="cancel-retry" data-task="${t.id}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50">停止</button>` : ''}
+        ${t.images.length>1 ? `<button data-act="dlall" data-task="${t.id}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50">下载全部</button>` : ''}
+        <button data-act="remove" data-task="${t.id}" class="w-7 h-7 text-slate-400 hover:text-red-600 rounded">✕</button>
+      </div>
+    </header>
+
+    ${(!isCollapsed && showProgress) ? `
+      <div class="mt-2 progress-bar"><div style="width:${progressPct}%"></div></div>
+      ${etaHtml}
+    ` : ''}
+
+    ${!isCollapsed ? imagesHtml : ''}
+    ${!isCollapsed ? errorHtml : ''}
+  </article>`;
+}
+
+function bindTaskRowEvents(){
+  // checkbox 切换选中状态（用属性赋值，不会累积监听器）
+  $('#tasksList').onchange = (e) => {
+    if (e.target.dataset?.act === 'select-img'){
+      const key = `${e.target.dataset.task}|${e.target.dataset.idx}`;
+      if (e.target.checked) state.selectedImages.add(key);
+      else state.selectedImages.delete(key);
+      updateSelectedCount();
+    }
+  };
+  $('#tasksList').onclick = async (e) => {
+    // URL 输入框点击 → 全选
+    const urlInput = e.target.closest('input[data-act="select-url"]');
+    if (urlInput){ urlInput.select(); return; }
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const t = state.tasks.find(x => x.id === btn.dataset.task);
+    if (!t) return;
+    const act = btn.dataset.act;
+    if (act === 'remove') return removeTask(t);
+    if (act === 'retry') return retryTask(t);
+    if (act === 'retry-now') return retryTask(t);
+    if (act === 'cancel-retry') return cancelRetry(t);
+    if (act === 'retry-config') return openTaskRetryModal(t);
+    if (act === 'toggle-collapse'){ t.collapsed = !t.collapsed; renderTaskRow(t); return; }
+    if (act === 'dl'){
+      const idx = parseInt(btn.dataset.idx, 10);
+      const img = t.images[idx]; if (img) downloadImage(img.url, suggestedName(t, idx));
+      return;
+    }
+    if (act === 'copy-url'){
+      const idx = parseInt(btn.dataset.idx, 10);
+      const img = t.images[idx];
+      if (img){
+        try {
+          await navigator.clipboard.writeText(img.url);
+          toast(`已复制 #${idx+1} 的 URL`, 'success', 2000);
+        } catch {
+          // 兜底：选中输入框
+          const input = btn.closest('.flex.flex-col')?.querySelector('input[data-act="select-url"]');
+          if (input){ input.select(); document.execCommand('copy'); toast(`已复制 #${idx+1} 的 URL`, 'success', 2000); }
+          else toast('复制失败，请手动选择 URL 框', 'warn');
+        }
+      }
+      return;
+    }
+    if (act === 'dlall'){
+      btn.disabled = true; btn.textContent = '打包中…';
+      try { await downloadTaskZip(t); } catch(err){ toast('打包失败：'+err.message, 'error'); }
+      btn.disabled = false; btn.textContent = '下载全部';
+    }
+  };
+}
+
+/* ============================================================
+ *  DOWNLOAD
+ * ========================================================== */
+function suggestedName(t, idx){
+  const slug = (t.prompt || 'image').replace(/[^\w一-龥]/g,'_').slice(0, 30);
+  const ext = (t.body.output_format && t.model==='gpt-image-2-official') ? t.body.output_format : 'png';
+  return `${slug}_${t.apiTaskId||t.id}_${idx}.${ext}`;
+}
+
+async function fetchImageBlob(url){
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`下载失败 HTTP ${resp.status}`);
+  return await resp.blob();
+}
+
+async function downloadImage(url, filename){
+  try {
+    const blob = await fetchImageBlob(url);
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = objUrl; a.download = filename; a.click();
+    setTimeout(()=>URL.revokeObjectURL(objUrl), 5000);
+  } catch(e){
+    // 兜底：直接以新标签打开
+    window.open(url, '_blank');
+    toast('已用新标签打开（可能被 CORS 拦截下载）', 'warn');
+  }
+}
+
+async function downloadTaskZip(t){
+  if (t.images.length === 0) return;
+  const zip = new JSZip();
+  for (let i=0;i<t.images.length;i++){
+    const blob = await fetchImageBlob(t.images[i].url);
+    zip.file(suggestedName(t, i), blob);
+  }
+  const out = await zip.generateAsync({type:'blob'});
+  const objUrl = URL.createObjectURL(out);
+  const a = document.createElement('a'); a.href = objUrl; a.download = `task_${t.apiTaskId||t.id}.zip`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(objUrl), 5000);
+}
+
+function updateSelectedCount(){
+  const n = state.selectedImages.size;
+  const countEl = $('#selectedCount');
+  if (countEl) countEl.textContent = n;
+  const dlBtn = $('#btnDownloadSelected');
+  if (dlBtn) dlBtn.disabled = n === 0;
+  const clearBtn = $('#btnClearSelection');
+  if (clearBtn) clearBtn.classList.toggle('hidden', n === 0);
+}
+
+// 清理 state.selectedImages 中已不存在的 key（任务被删除时调用）
+function pruneSelectedImages(){
+  const valid = new Set();
+  for (const t of state.tasks){
+    for (let i = 0; i < t.images.length; i++) valid.add(`${t.id}|${i}`);
+  }
+  for (const k of Array.from(state.selectedImages)){
+    if (!valid.has(k)) state.selectedImages.delete(k);
+  }
+  updateSelectedCount();
+}
+
+async function downloadSelected(){
+  if (state.selectedImages.size === 0){ toast('请先勾选图片', 'warn'); return; }
+  // 把 selectedImages 解析为 {task, idx, img}
+  const items = [];
+  for (const key of state.selectedImages){
+    const [taskId, idxStr] = key.split('|');
+    const t = state.tasks.find(x => x.id === taskId);
+    if (!t) continue;
+    const idx = parseInt(idxStr, 10);
+    const img = t.images[idx];
+    if (img) items.push({ t, idx, img });
+  }
+  if (items.length === 0){ toast('选中的任务/图片已不存在', 'warn'); return; }
+
+  const btn = $('#btnDownloadSelected');
+  btn.disabled = true;
+  const origLabel = btn.innerHTML;
+  btn.innerHTML = `打包中… (0/${items.length})`;
+  toast(`打包中：${items.length} 张图…`, 'info');
+
+  const zip = new JSZip();
+  let done = 0;
+  for (const { t, idx, img } of items){
+    try {
+      const blob = await fetchImageBlob(img.url);
+      // 按任务 prompt 分子文件夹，避免同名覆盖
+      const folderName = `${(t.prompt||'task').replace(/[^\w一-龥]/g,'_').slice(0,24)}_${t.apiTaskId||t.id}`;
+      zip.folder(folderName).file(suggestedName(t, idx), blob);
+    } catch(e){
+      const folderName = `${(t.prompt||'task').replace(/[^\w一-龥]/g,'_').slice(0,24)}_${t.apiTaskId||t.id}`;
+      zip.folder(folderName).file(`ERROR_${idx}.txt`, `下载失败: ${e.message}\nURL: ${img.url}`);
+    }
+    done++;
+    btn.innerHTML = `打包中… (${done}/${items.length})`;
+  }
+  const blob = await zip.generateAsync({type:'blob'});
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objUrl;
+  a.download = `gpt-image-2_selected_${items.length}_${Date.now()}.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+  btn.innerHTML = origLabel;
+  updateSelectedCount();
+  toast(`打包完成：${items.length} 张图`, 'success');
+}
+
+async function downloadAll(){
+  const completed = state.tasks.filter(t => t.status === 'completed' && t.images.length>0);
+  if (completed.length === 0){ toast('没有可下载的已完成任务', 'warn'); return; }
+  const totalImgs = completed.reduce((s,t)=>s+t.images.length, 0);
+  toast(`打包中：${completed.length} 个任务 / ${totalImgs} 张图…`, 'info');
+  const zip = new JSZip();
+  for (const t of completed){
+    const folder = zip.folder(`${(t.prompt||'task').replace(/[^\w一-龥]/g,'_').slice(0,24)}_${t.apiTaskId||t.id}`);
+    for (let i=0;i<t.images.length;i++){
+      try {
+        const blob = await fetchImageBlob(t.images[i].url);
+        folder.file(suggestedName(t, i), blob);
+      } catch(e){
+        folder.file(`ERROR_${i}.txt`, `下载失败: ${e.message}\nURL: ${t.images[i].url}`);
+      }
+    }
+  }
+  const blob = await zip.generateAsync({type:'blob'});
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = objUrl; a.download = `gpt-image-2_batch_${Date.now()}.zip`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(objUrl), 5000);
+  toast('打包完成', 'success');
+}
+
+/* ============================================================
+ *  EVENT WIRING
+ * ========================================================== */
+function wireUp(){
+  // tabs
+  $$('.tab-btn').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+
+  // version modal
+  $('#btnVersion').onclick = openVersionModal;
+  $('#versionModalClose').onclick = closeVersionModal;
+  $('#versionModal').addEventListener('click', (e) => {
+    if (e.target === $('#versionModal')) closeVersionModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#versionModal').classList.contains('hidden')) closeVersionModal();
+  });
+
+  // settings
+  $('#btnSettings').onclick = () => $('#settingsPanel').classList.toggle('hidden');
+  $('#apiKey').oninput = (e) => {
+    state.apiKey = e.target.value.trim();
+    saveConfig();
+    updateApiKeyStatus();
+    renderBalance();
+    if (state.apiKey) refreshBalanceDebounced();
+  };
+  $('#baseUrl').oninput = (e) => { state.baseUrl = e.target.value.trim().replace(/\/$/,''); saveConfig(); refreshBalanceDebounced(); };
+  $('#concurrency').oninput = (e) => { state.concurrency = Math.max(1, Math.min(20, parseInt(e.target.value||'1',10))); saveConfig(); pumpQueue(); };
+  $('#btnToggleKey').onclick = () => {
+    const i = $('#apiKey'); i.type = i.type === 'password' ? 'text' : 'password';
+  };
+  $('#btnClearKey').onclick = clearConfig;
+  $('#btnResetPrices').onclick = resetLearnedPrices;
+
+  // 余额刷新按钮（事件委托，因为按钮会被 renderBalance 重新生成）
+  $('#balanceDisplay').addEventListener('click', (e) => {
+    if (e.target.closest('#btnRefreshBalance')) refreshBalance(false);
+  });
+
+  // 重试配置
+  $('#retryMode').onchange = (e) => {
+    state.retry.mode = e.target.value;
+    $('#retryCountWrap').classList.toggle('hidden', state.retry.mode !== 'count');
+    $('#retryDurationWrap').classList.toggle('hidden', state.retry.mode !== 'duration');
+    saveConfig();
+  };
+  $('#retryCount').oninput = (e) => { state.retry.count = Math.max(1, Math.min(100, parseInt(e.target.value||'1',10))); saveConfig(); };
+  $('#retryDuration').oninput = (e) => { state.retry.duration = Math.max(1, Math.min(1440, parseInt(e.target.value||'1',10))); saveConfig(); };
+  $('#retryInterval').oninput = (e) => { state.retry.interval = Math.max(1, Math.min(600, parseInt(e.target.value||'1',10))); saveConfig(); };
+  $('#retrySkip4xx').onchange = (e) => { state.retry.skip4xx = !!e.target.checked; saveConfig(); };
+
+  // mask 上传
+  $('#btnUploadMask').onclick = () => $('#maskFileInput').click();
+  $('#maskFileInput').onchange = (e) => { if (e.target.files[0]) loadMaskFile(e.target.files[0]); };
+  $('#btnClearMask').onclick = clearMaskFile;
+  $('#maskUrl').oninput = () => {
+    // 用户手动输入 URL 时清掉本地文件
+    if (state.maskFile && $('#maskUrl').value.trim() && !$('#maskUrl').value.startsWith('[本地文件')){
+      state.maskFile = null;
+      $('#maskPreview').classList.add('hidden');
+    }
+  };
+
+  // model
+  $$('.model-btn').forEach(b => b.onclick = () => setModel(b.dataset.model));
+
+  // size + resolution + 具体像素
+  $('#size').onchange = () => { maybeResetPixelMode(); updateSizeHints(); renderCostEstimate(); };
+  $('#resolution').onchange = () => { maybeResetPixelMode(); updateSizeHints(); renderCostEstimate(); };
+  $('#pixelMode').onchange = () => { syncDropdownsFromPixelMode(); updateSizeHints(); renderCostEstimate(); };
+  $('#customW').oninput = () => { updateSizeHints(); renderCostEstimate(); };
+  $('#customH').oninput = () => { updateSizeHints(); renderCostEstimate(); };
+
+  // 影响价格估算的字段
+  $('#quality').onchange = renderCostEstimate;
+  $('#n').oninput = renderCostEstimate;
+  $('#batchCount').oninput = renderCostEstimate;
+
+  // prompt counter
+  $('#prompt').oninput = (e) => $('#promptCount').textContent = e.target.value.length;
+
+  // ref images
+  const dz = $('#dropZone');
+  dz.onclick = () => $('#fileInput').click();
+  $('#fileInput').onchange = (e) => addRefFiles(e.target.files);
+  ;['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('bg-blue-50','border-blue-400'); }));
+  ;['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('bg-blue-50','border-blue-400'); }));
+  dz.addEventListener('drop', e => addRefFiles(e.dataTransfer.files));
+  $('#btnAddUrl').onclick = () => addRefUrl($('#urlInput').value.trim());
+  $('#urlInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addRefUrl($('#urlInput').value.trim()); } });
+  // global paste -> 直接加图
+  document.addEventListener('paste', async (e) => {
+    if (document.activeElement && /TEXTAREA|INPUT/.test(document.activeElement.tagName)) return;
+    const items = Array.from(e.clipboardData?.items || []);
+    const imgs = items.filter(it => it.type.startsWith('image/'));
+    if (imgs.length){
+      const files = imgs.map(it => it.getAsFile()).filter(Boolean);
+      await addRefFiles(files);
+    }
+  });
+
+  // submit
+  $('#btnSubmit').onclick = onSubmit;
+  $('#btnReset').onclick = () => {
+    $('#prompt').value = ''; $('#promptCount').textContent = '0';
+    state.refImages = []; renderRefList();
+    clearMaskFile();
+    $('#size').value = '1:1'; $('#resolution').value = '1k';
+    $('#pixelMode').value = 'auto';
+    $('#customW').value = ''; $('#customH').value = '';
+    updateSizeHints();
+    $('#n').value = 1; $('#batchCount').value = 1;
+    $('#formError').classList.add('hidden');
+  };
+
+  // tasks bulk
+  $('#btnDownloadAll').onclick = downloadAll;
+  $('#btnDownloadSelected').onclick = downloadSelected;
+  $('#btnClearSelection').onclick = () => { state.selectedImages.clear(); updateSelectedCount(); renderTasks(); };
+  $('#btnExpandAll').onclick = () => { state.tasks.forEach(t => t.collapsed = false); renderTasks(); };
+  $('#btnCollapseAll').onclick = () => { state.tasks.forEach(t => t.collapsed = true); renderTasks(); };
+  $('#btnClearDone').onclick = () => {
+    state.tasks = state.tasks.filter(t => t.status !== 'completed');
+    pruneSelectedImages();
+    renderTasks();
+  };
+  $('#btnClearAll').onclick = () => {
+    if (!confirm('确认清空所有任务？\n\n• 进行中 / 等待重试的任务都会被遗弃（API 端不会真停止）\n• 全局「自动重试」也会被关闭，避免下次提交不小心继续触发\n  （可在设置面板手动重新开启）')) return;
+    state.tasks.forEach(t => { clearTaskTimer(t); clearRetryTimer(t); });
+    state.tasks = []; state.pendingQueue = []; state.activeCount = 0;
+    state.selectedImages.clear();
+    updateSelectedCount();
+    // 关闭全局自动重试
+    state.retry.mode = 'off';
+    $('#retryMode').value = 'off';
+    $('#retryCountWrap').classList.add('hidden');
+    $('#retryDurationWrap').classList.add('hidden');
+    saveConfig();
+    renderTasks();
+    renderCostEstimate();
+    toast('已清空任务并关闭全局自动重试', 'success');
+  };
+
+  // 任务级重试 Modal
+  $('#taskRetryCancel').onclick = closeTaskRetryModal;
+  $('#taskRetrySave').onclick = saveTaskRetry;
+  $('#taskRetryStop').onclick = stopThisTaskRetry;
+  $('#taskRetryUseOverride').onchange = (e) => {
+    $('#taskRetryFields').classList.toggle('hidden', !e.target.checked);
+  };
+  $('#taskRetryMode').onchange = (e) => {
+    const m = e.target.value;
+    $('#taskRetryCountWrap').classList.toggle('hidden', m !== 'count');
+    $('#taskRetryDurationWrap').classList.toggle('hidden', m !== 'duration');
+  };
+  $('#taskRetryModal').onclick = (e) => {
+    if (e.target === $('#taskRetryModal')) closeTaskRetryModal(); // 点背景关闭
+  };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#taskRetryModal').classList.contains('hidden')) closeTaskRetryModal();
+  });
+}
+
+function onSubmit(){
+  const errEl = $('#formError'); errEl.classList.add('hidden');
+  let body;
+  try { body = buildBody(); }
+  catch(e){ errEl.textContent = e.message; errEl.classList.remove('hidden'); return; }
+
+  const batch = Math.max(1, Math.min(50, parseInt($('#batchCount').value || '1', 10)));
+
+  // 提交前余额预检
+  if (state.balance.user != null && !state.balance.unlimited){
+    const tier = /^(1k|2k|4k)$/.test(body.resolution) ? body.resolution : (body.resolution||'').toLowerCase();
+    const q = body.model === 'gpt-image-2-official' ? (body.quality||'auto') : 'default';
+    const est = estimatePerImage(body.model, tier, q);
+    if (est.price != null){
+      const total = est.price * (body.n||1) * batch;
+      if (total > state.balance.user){
+        if (!confirm(`本次预估成本 $${total.toFixed(4)} 超过当前余额 $${state.balance.user.toFixed(3)}，提交后大概率触发 quota not enough。\n\n仍要继续吗？`)) return;
+      }
+    }
+  }
+
+  for (let i=0;i<batch;i++){
+    addTask(JSON.parse(JSON.stringify(body)));
+  }
+  toast(`已加入队列：${batch} 个任务`, 'success');
+  refreshBalanceDebounced();
+}
+
+/* ============================================================
+ *  版本 / 更新日志 Modal
+ * ========================================================== */
+function openVersionModal(){
+  $('#versionModalLabel').textContent = `当前 v${APP_VERSION} · 发布于 ${APP_RELEASE_DATE}`;
+  const body = $('#versionModalBody');
+  body.innerHTML = APP_CHANGELOG.map((v, idx) => {
+    const isCurrent = v.version === APP_VERSION;
+    return `
+      <section class="rounded-lg ${isCurrent?'border border-blue-200 bg-blue-50':'border border-slate-200 bg-white'} p-3">
+        <div class="flex items-baseline justify-between gap-2 flex-wrap">
+          <h4 class="font-semibold flex items-center gap-2">
+            <span class="font-mono text-sm ${isCurrent?'text-blue-700':'text-slate-700'}">v${v.version}</span>
+            ${isCurrent?'<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white">当前</span>':''}
+            <span class="text-sm text-slate-700 font-normal">${escapeHtml(v.title)}</span>
+          </h4>
+          <span class="text-[11px] text-slate-400 font-mono">${escapeHtml(v.date)}</span>
+        </div>
+        <ul class="mt-2 space-y-1 text-xs text-slate-700 leading-relaxed">
+          ${v.changes.map(c => `<li class="flex gap-2"><span class="text-slate-400 shrink-0">•</span><span>${escapeHtml(c)}</span></li>`).join('')}
+        </ul>
+      </section>
+    `;
+  }).join('');
+  $('#versionModal').classList.remove('hidden');
+}
+function closeVersionModal(){ $('#versionModal').classList.add('hidden'); }
+
+/* ============================================================
+ *  TABS
+ * ========================================================== */
+function switchTab(name){
+  $$('.tab-btn').forEach(b => {
+    const active = b.dataset.tab === name;
+    b.classList.toggle('border-blue-600', active);
+    b.classList.toggle('text-blue-700', active);
+    b.classList.toggle('border-transparent', !active);
+    b.classList.toggle('text-slate-500', !active);
+  });
+  $('#viewGenerate').classList.toggle('hidden', name !== 'generate');
+  $('#viewMask').classList.toggle('hidden', name !== 'mask');
+  if (name === 'mask'){
+    maskEditor.init();
+    maskEditor.updateRefImageButton();
+  }
+}
+
+/* ============================================================
+ *  MASK 编辑器
+ * ========================================================== */
+const maskEditor = {
+  initialized: false,
+  imgCanvas: null, overlayCanvas: null, cursorCanvas: null,
+  imgCtx: null, overlayCtx: null, cursorCtx: null,
+  width: 0, height: 0,
+  imgURL: null, imgName: null,
+  tool: 'brush',
+  brushSize: 50,
+  brushHardness: 100,
+  overlayAlpha: 0.5,
+  drawing: false,
+  lastX: 0, lastY: 0,
+  history: [],
+  historyIdx: -1,
+  maxHistory: 30,
+  // 缩放：zoom = 显示像素 / 原始像素（1.0 = 100%）
+  zoom: 1,
+  minZoom: 0.1,
+  maxZoom: 10,
+
+  init(){
+    if (this.initialized) return;
+    this.initialized = true;
+    this.imgCanvas = $('#maskImgCanvas');
+    this.overlayCanvas = $('#maskOverlayCanvas');
+    this.cursorCanvas = $('#maskCursorCanvas');
+    this.imgCtx = this.imgCanvas.getContext('2d');
+    this.overlayCtx = this.overlayCanvas.getContext('2d');
+    this.cursorCtx = this.cursorCanvas.getContext('2d');
+    this.bindUI();
+  },
+
+  bindUI(){
+    $$('.mask-tool').forEach(b => { b.onclick = () => this.setTool(b.dataset.tool); });
+    $('#brushSize').oninput = (e) => {
+      this.brushSize = parseInt(e.target.value, 10);
+      $('#brushSizeLabel').textContent = `${this.brushSize} px`;
+    };
+    $('#brushHardness').oninput = (e) => {
+      this.brushHardness = parseInt(e.target.value, 10);
+      $('#brushHardnessLabel').textContent = `${this.brushHardness}%`;
+    };
+    $('#overlayAlpha').oninput = (e) => {
+      this.overlayAlpha = parseInt(e.target.value, 10) / 100;
+      $('#overlayAlphaLabel').textContent = `${e.target.value}%`;
+      if (this.overlayCanvas) this.overlayCanvas.style.opacity = this.overlayAlpha;
+    };
+    $('#btnMaskUploadImg').onclick = () => $('#maskEditorImgInput').click();
+    $('#maskEditorImgInput').onchange = async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      this.imgName = file.name;
+      const uri = await fileToDataUri(file);
+      await this.loadImage(uri);
+      e.target.value = '';
+    };
+    $('#btnMaskUseRefImage').onclick = () => this.useFirstRefImage();
+    $('#btnMaskClearImage').onclick = () => this.clearImage();
+    $('#btnMaskUndo').onclick = () => this.undo();
+    $('#btnMaskRedo').onclick = () => this.redo();
+    $('#btnMaskClear').onclick = () => this.clear();
+    $('#btnMaskInvert').onclick = () => this.invert();
+    $('#btnMaskFill').onclick = () => this.fill();
+    $('#btnMaskUseInForm').onclick = () => this.saveToForm();
+    $('#btnMaskExport').onclick = () => this.export();
+
+    // 缩放浮动工具栏
+    $('#btnZoomIn').onclick     = () => this.zoomIn();
+    $('#btnZoomOut').onclick    = () => this.zoomOut();
+    $('#btnZoomLabel').onclick  = () => this.zoomActual();
+    $('#btnZoomFit').onclick    = () => this.fitToWindow();
+    $('#btnZoomActual').onclick = () => this.zoomActual();
+
+    const c = this.overlayCanvas;
+    c.addEventListener('pointerdown', (e) => this.startDraw(e));
+    c.addEventListener('pointermove', (e) => { this.drawCursor(e); this.draw(e); });
+    c.addEventListener('pointerup',   (e) => this.endDraw(e));
+    c.addEventListener('pointercancel',(e) => this.endDraw(e));
+    c.addEventListener('pointerleave', (e) => { this.endDraw(e); this.clearCursor(); });
+
+    // Ctrl/⌘ + 滚轮：以光标为中心缩放
+    const wrap = $('#maskCanvasWrap');
+    wrap.addEventListener('wheel', (e) => {
+      if (!this.imgURL) return;
+      if (!(e.ctrlKey || e.metaKey)) return; // 仅 Ctrl/⌘+滚轮才缩放，普通滚轮保留为平移
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : (1/1.1);
+      this.setZoom(this.zoom * factor, e.clientX, e.clientY);
+    }, { passive: false });
+
+    // 拖拽载入图片（替换当前图）
+    let dragCount = 0;
+    const overlay = $('#maskDropOverlay');
+    const isImageDrag = (e) => {
+      const t = e.dataTransfer && e.dataTransfer.types;
+      return t && (Array.from(t).includes('Files') || Array.from(t).includes('text/uri-list'));
+    };
+    wrap.addEventListener('dragenter', (e) => {
+      if (!isImageDrag(e)) return;
+      e.preventDefault();
+      dragCount++;
+      if (dragCount === 1) overlay.classList.remove('hidden');
+    });
+    wrap.addEventListener('dragover', (e) => {
+      if (!isImageDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    wrap.addEventListener('dragleave', (e) => {
+      if (!isImageDrag(e)) return;
+      e.preventDefault();
+      dragCount = Math.max(0, dragCount - 1);
+      if (dragCount === 0) overlay.classList.add('hidden');
+    });
+    wrap.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dragCount = 0;
+      overlay.classList.add('hidden');
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      // 优先：本地文件
+      const file = Array.from(dt.files || []).find(f => f.type.startsWith('image/'));
+      if (file){
+        if (this.hasPaint() && !confirm('当前画布已有涂抹，载入新图会丢弃现在的遮罩。继续？')) return;
+        this.imgName = file.name;
+        try {
+          const uri = await fileToDataUri(file);
+          await this.loadImage(uri);
+          toast(`已载入：${file.name}`, 'success');
+        } catch(_){ toast('图片读取失败', 'error'); }
+        return;
+      }
+      // 退化：拖入的是 URL（如从其他网页拖图）
+      const uri = dt.getData('text/uri-list') || dt.getData('text/plain');
+      if (uri && /^(https?:|data:image\/)/i.test(uri.trim())){
+        if (this.hasPaint() && !confirm('当前画布已有涂抹，载入新图会丢弃现在的遮罩。继续？')) return;
+        this.imgName = uri.split('/').pop().split('?')[0] || 'dragged-image';
+        await this.loadImage(uri.trim());
+        toast('已从 URL 载入', 'success');
+        return;
+      }
+      toast('未识别到可用的图片', 'warn');
+    });
+
+    // 快速选区按钮（v0.11.0）
+    $$('.mask-quick').forEach(b => {
+      b.onclick = () => this.runQuickSelect(b.dataset.quick);
+    });
+    // AI 模块就绪事件
+    if (window.maskAI && window.maskAI.ready){
+      const tag = $('#maskAIStatus');
+      if (tag) tag.textContent = '已就绪';
+    } else {
+      window.addEventListener('maskAIReady', () => {
+        const tag = $('#maskAIStatus');
+        if (tag) tag.textContent = '已就绪';
+      }, { once: true });
+    }
+
+    // Keyboard shortcuts (only inside mask tab + not when typing)
+    document.addEventListener('keydown', (e) => {
+      if ($('#viewMask').classList.contains('hidden')) return;
+      if (document.activeElement && /TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      // 缩放快捷键（优先级最高）
+      if (mod && (e.key === '=' || e.key === '+')) { this.zoomIn();  e.preventDefault(); return; }
+      if (mod && e.key === '-')                    { this.zoomOut(); e.preventDefault(); return; }
+      if (mod && e.key === '0')                    { this.fitToWindow(); e.preventDefault(); return; }
+      if (mod && e.key === '1')                    { this.zoomActual();  e.preventDefault(); return; }
+      if (e.key === 'b' || e.key === 'B') { this.setTool('brush'); e.preventDefault(); }
+      else if (e.key === 'e' || e.key === 'E') { this.setTool('eraser'); e.preventDefault(); }
+      else if (e.key === '[') { this.adjustBrush(-10); e.preventDefault(); }
+      else if (e.key === ']') { this.adjustBrush(10); e.preventDefault(); }
+      else if (mod && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) { this.undo(); e.preventDefault(); }
+      else if (mod && ((e.key === 'z' || e.key === 'Z') && e.shiftKey || e.key === 'y' || e.key === 'Y')) { this.redo(); e.preventDefault(); }
+    });
+  },
+
+  setTool(t){
+    this.tool = t;
+    $$('.mask-tool').forEach(b => {
+      const active = b.dataset.tool === t;
+      b.classList.toggle('bg-blue-50', active);
+      b.classList.toggle('text-blue-700', active);
+      b.classList.toggle('border-blue-300', active);
+    });
+  },
+
+  adjustBrush(delta){
+    this.brushSize = Math.max(2, Math.min(400, this.brushSize + delta));
+    $('#brushSize').value = this.brushSize;
+    $('#brushSizeLabel').textContent = `${this.brushSize} px`;
+  },
+
+  updateRefImageButton(){
+    const btn = $('#btnMaskUseRefImage');
+    if (!btn) return;
+    if (state.refImages.length > 0){
+      btn.classList.remove('hidden');
+      btn.textContent = `使用主页第 1 张参考图`;
+    } else {
+      btn.classList.add('hidden');
+    }
+  },
+
+  async useFirstRefImage(){
+    const r0 = state.refImages[0];
+    if (!r0) return toast('主页面还没有参考图', 'warn');
+    const src = r0.isUrl ? r0.url : r0.dataUri;
+    this.imgName = r0.name || 'ref-image';
+    await this.loadImage(src);
+  },
+
+  async loadImage(srcURL){
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = srcURL;
+    try { await new Promise((res, rej) => { img.onload = res; img.onerror = rej; }); }
+    catch(e){ toast('图片加载失败', 'error'); return; }
+
+    this.width = img.naturalWidth; this.height = img.naturalHeight;
+    this.imgURL = srcURL;
+    this.imgCanvas.width = this.width;     this.imgCanvas.height = this.height;
+    this.overlayCanvas.width = this.width; this.overlayCanvas.height = this.height;
+    this.cursorCanvas.width = this.width;  this.cursorCanvas.height = this.height;
+    try { this.imgCtx.drawImage(img, 0, 0); }
+    catch(e){ toast('Canvas 受 CORS 污染，请改用本地上传', 'error'); return; }
+    this.overlayCtx.clearRect(0, 0, this.width, this.height);
+    this.history = []; this.historyIdx = -1;
+    this.pushHistory();
+
+    $('#maskCanvasEmpty').classList.add('hidden');
+    $('#maskCanvasStack').classList.remove('hidden');
+    $('#maskZoomToolbar').classList.remove('hidden');
+    $('#btnMaskClearImage').classList.remove('hidden');
+    $('#maskQuickPanel').classList.remove('hidden');
+
+    this.overlayCanvas.style.opacity = this.overlayAlpha;
+    // 默认适应窗口
+    this.fitToWindow();
+    this.updateImageInfo();
+    this.updateHistoryInfo();
+  },
+
+  // 清除当前编辑器中的参考图（不影响主页面）
+  clearImage(){
+    if (!this.imgURL) return;
+    if (this.hasPaint() && !confirm('当前画布已有涂抹，清除参考图会丢弃现在的遮罩。继续？')) return;
+    // 清空 canvas（width 设 0 也行，但保留 width/height 触发 GPU 释放）
+    if (this.imgCtx)     this.imgCtx.clearRect(0, 0, this.width, this.height);
+    if (this.overlayCtx) this.overlayCtx.clearRect(0, 0, this.width, this.height);
+    if (this.cursorCtx)  this.cursorCtx.clearRect(0, 0, this.width, this.height);
+    this.imgURL = null;
+    this.imgName = null;
+    this.width = 0;
+    this.height = 0;
+    this.history = [];
+    this.historyIdx = -1;
+    this.zoom = 1;
+    $('#maskCanvasEmpty').classList.remove('hidden');
+    $('#maskCanvasStack').classList.add('hidden');
+    $('#maskZoomToolbar').classList.add('hidden');
+    $('#btnMaskClearImage').classList.add('hidden');
+    $('#maskQuickPanel').classList.add('hidden');
+    this.updateImageInfo();
+    this.updateHistoryInfo();
+    toast('已清除编辑器参考图', 'info');
+  },
+
+  /* ---------- v0.11.0 快速选区 ---------- */
+  async runQuickSelect(kind){
+    if (!this.imgURL) return toast('请先选择参考图', 'warn');
+    const fnMap = {
+      person:     'segmentPerson',
+      background: 'segmentBackground',
+      head:       'segmentHead',
+      hands:      'segmentHands',
+      feet:       'segmentFeet'
+    };
+    const fnName = fnMap[kind];
+    if (!fnName) return;
+    if (!window.maskAI || !window.maskAI[fnName]){
+      return toast('AI 模块未就绪 — 检查网络 / CDN（jsdelivr / googleapis）是否可达', 'error', 6000);
+    }
+    const tag = $('#maskAIStatus');
+    if (tag) tag.textContent = '运行中…';
+    $$('.mask-quick').forEach(b => b.disabled = true);
+    const t0 = performance.now();
+    try {
+      const { imageData, info } = await window.maskAI[fnName](this.imgCanvas);
+      const ovl = this.overlayCtx.getImageData(0, 0, this.width, this.height);
+      const od = ovl.data, md = imageData.data;
+      let touched = 0;
+      for (let i = 0; i < od.length; i += 4){
+        if (md[i+3] > 128){
+          od[i] = 239; od[i+1] = 68; od[i+2] = 68; od[i+3] = 255;
+          touched++;
+        }
+      }
+      this.overlayCtx.putImageData(ovl, 0, 0);
+      this.pushHistory();
+      const dt = ((performance.now() - t0) / 1000).toFixed(1);
+      const kpx = (touched/1000).toFixed(0);
+      toast(`✓ ${info} 已合并到遮罩（${kpx}k px, ${dt}s）。可在编辑器精修。`, 'success', 4500);
+      if (tag) tag.textContent = `就绪 · ${dt}s`;
+    } catch(e){
+      const msg = e && e.message || String(e);
+      toast(`${kind} 失败：${msg}`, 'error', 7000);
+      if (tag) tag.textContent = '失败，可重试';
+    } finally {
+      $$('.mask-quick').forEach(b => b.disabled = false);
+    }
+  },
+
+  updateImageInfo(){
+    if (!this.imgURL){ $('#maskCanvasInfo').firstElementChild.textContent = '请先选择或上传一张参考图'; return; }
+    $('#maskCanvasInfo').firstElementChild.textContent =
+      `${this.imgName||'image'} · ${this.width}×${this.height} px · 显示 ${Math.round(this.zoom*100)}%`;
+  },
+
+  /* ---------- 缩放（Photopea / SD WebUI 风格） ---------- */
+  // 应用当前 zoom 到 DOM；不动滚动条
+  applyZoom(){
+    const dispW = Math.round(this.width  * this.zoom);
+    const dispH = Math.round(this.height * this.zoom);
+    $('#maskCanvasStack').style.width  = dispW + 'px';
+    $('#maskCanvasStack').style.height = dispH + 'px';
+    for (const c of [this.imgCanvas, this.overlayCanvas, this.cursorCanvas]){
+      c.style.width  = dispW + 'px';
+      c.style.height = dispH + 'px';
+    }
+  },
+
+  updateZoomLabel(){
+    const lbl = $('#btnZoomLabel');
+    if (lbl) lbl.textContent = `${Math.round(this.zoom*100)}%`;
+    const zin = $('#btnZoomIn'), zout = $('#btnZoomOut');
+    if (zin)  zin.disabled  = this.zoom >= this.maxZoom - 1e-6;
+    if (zout) zout.disabled = this.zoom <= this.minZoom + 1e-6;
+    this.updateImageInfo();
+  },
+
+  // 设置缩放，可选锚点（视口坐标），保持锚点下方的图像内容点不动
+  setZoom(newZoom, anchorClientX, anchorClientY){
+    if (!this.imgURL) return;
+    newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, newZoom));
+    if (Math.abs(newZoom - this.zoom) < 1e-6) return;
+
+    const wrap  = $('#maskCanvasWrap');
+    const stack = $('#maskCanvasStack');
+    const wrapRect = wrap.getBoundingClientRect();
+
+    // 默认锚点：wrap 视口中心
+    const ax = (anchorClientX != null) ? anchorClientX : (wrapRect.left + wrapRect.width  / 2);
+    const ay = (anchorClientY != null) ? anchorClientY : (wrapRect.top  + wrapRect.height / 2);
+
+    // 锚点在 wrap 内的坐标（相对 wrap content，已含 scroll）
+    const anchorInWrapX = ax - wrapRect.left + wrap.scrollLeft;
+    const anchorInWrapY = ay - wrapRect.top  + wrap.scrollTop;
+
+    // 锚点对应的图像归一化坐标（0–1 内即图像内）
+    const oldDispW = this.width  * this.zoom;
+    const oldDispH = this.height * this.zoom;
+    const oldOffX  = stack.offsetLeft;  // mx-auto 居中时 > 0；图比 wrap 大时 = 0
+    const oldOffY  = stack.offsetTop;
+    const fracX = (anchorInWrapX - oldOffX) / oldDispW;
+    const fracY = (anchorInWrapY - oldOffY) / oldDispH;
+
+    this.zoom = newZoom;
+    this.applyZoom();
+
+    // 计算新锚点对应位置，调滚动条让锚点落回视口同一处
+    const newDispW = this.width  * this.zoom;
+    const newDispH = this.height * this.zoom;
+    const newOffX  = stack.offsetLeft;
+    const newOffY  = stack.offsetTop;
+    const newAnchorInWrapX = newOffX + fracX * newDispW;
+    const newAnchorInWrapY = newOffY + fracY * newDispH;
+    wrap.scrollLeft = newAnchorInWrapX - (ax - wrapRect.left);
+    wrap.scrollTop  = newAnchorInWrapY - (ay - wrapRect.top);
+
+    this.updateZoomLabel();
+  },
+
+  // 适应窗口：算出最大不超过 wrap 又不超过 1.0 的 scale
+  fitToWindow(){
+    if (!this.imgURL) return;
+    const wrap  = $('#maskCanvasWrap');
+    const wrapW = Math.max(50, wrap.clientWidth  - 16);
+    const wrapH = Math.max(50, wrap.clientHeight - 16);
+    let s = Math.min(1, wrapW / this.width);
+    if (this.height * s > wrapH) s = wrapH / this.height;
+    s = Math.max(this.minZoom, Math.min(this.maxZoom, s));
+    this.zoom = s;
+    this.applyZoom();
+    // 适应后回到左上角
+    wrap.scrollLeft = 0; wrap.scrollTop = 0;
+    this.updateZoomLabel();
+  },
+
+  zoomActual(){ this.setZoom(1); },
+  zoomIn(){    this.setZoom(this.zoom * 1.25); },
+  zoomOut(){   this.setZoom(this.zoom / 1.25); },
+
+  getCanvasCoords(e){
+    const rect = this.overlayCanvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (this.width  / rect.width),
+      y: (e.clientY - rect.top)  * (this.height / rect.height)
+    };
+  },
+
+  startDraw(e){
+    if (!this.imgURL) return;
+    e.preventDefault();
+    this.overlayCanvas.setPointerCapture?.(e.pointerId);
+    this.drawing = true;
+    const { x, y } = this.getCanvasCoords(e);
+    this.lastX = x; this.lastY = y;
+    this.drawAt(x, y);
+  },
+  draw(e){
+    if (!this.drawing) return;
+    e.preventDefault();
+    const { x, y } = this.getCanvasCoords(e);
+    const dx = x - this.lastX, dy = y - this.lastY;
+    const dist = Math.hypot(dx, dy);
+    const step = Math.max(1, this.brushSize / 6);
+    if (dist > step){
+      const steps = Math.ceil(dist / step);
+      for (let i = 1; i <= steps; i++){
+        const t = i / steps;
+        this.drawAt(this.lastX + dx*t, this.lastY + dy*t);
+      }
+    } else this.drawAt(x, y);
+    this.lastX = x; this.lastY = y;
+  },
+  endDraw(e){
+    if (!this.drawing) return;
+    this.drawing = false;
+    try { this.overlayCanvas.releasePointerCapture?.(e?.pointerId); } catch(_){}
+    this.pushHistory();
+  },
+  drawAt(x, y){
+    const ctx = this.overlayCtx;
+    const r = this.brushSize / 2;
+    if (this.tool === 'brush'){
+      ctx.globalCompositeOperation = 'source-over';
+      const hard = this.brushHardness / 100;
+      if (hard >= 0.99){
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+      } else {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, 'rgba(239,68,68,1)');
+        g.addColorStop(hard, 'rgba(239,68,68,1)');
+        g.addColorStop(1, 'rgba(239,68,68,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+      }
+    } else {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+    }
+  },
+  drawCursor(e){
+    if (!this.imgURL) return;
+    const { x, y } = this.getCanvasCoords(e);
+    const ctx = this.cursorCtx;
+    ctx.clearRect(0, 0, this.width, this.height);
+    ctx.strokeStyle = this.tool === 'brush' ? '#ef4444' : '#3b82f6';
+    // 屏幕上始终约 1.5px：canvas 线宽 × CSS 缩放(=zoom) ≈ 1.5
+    ctx.lineWidth = Math.max(0.5, 1.5 / this.zoom);
+    ctx.beginPath(); ctx.arc(x, y, this.brushSize / 2, 0, Math.PI*2); ctx.stroke();
+  },
+  clearCursor(){
+    if (this.cursorCtx) this.cursorCtx.clearRect(0, 0, this.width, this.height);
+  },
+
+  pushHistory(){
+    if (!this.imgURL) return;
+    const snap = this.overlayCtx.getImageData(0, 0, this.width, this.height);
+    this.history = this.history.slice(0, this.historyIdx + 1);
+    this.history.push(snap);
+    if (this.history.length > this.maxHistory){
+      this.history.shift();
+    } else {
+      this.historyIdx++;
+    }
+    this.updateHistoryInfo();
+  },
+  undo(){
+    if (this.historyIdx <= 0) return;
+    this.historyIdx--;
+    this.overlayCtx.putImageData(this.history[this.historyIdx], 0, 0);
+    this.updateHistoryInfo();
+  },
+  redo(){
+    if (this.historyIdx >= this.history.length - 1) return;
+    this.historyIdx++;
+    this.overlayCtx.putImageData(this.history[this.historyIdx], 0, 0);
+    this.updateHistoryInfo();
+  },
+  updateHistoryInfo(){
+    $('#btnMaskUndo').disabled = this.historyIdx <= 0;
+    $('#btnMaskRedo').disabled = this.historyIdx >= this.history.length - 1;
+    $('#maskHistoryInfo').textContent = this.imgURL ? `历史 ${this.historyIdx}/${this.history.length - 1}` : '';
+  },
+  clear(){ if (!this.imgURL) return; this.overlayCtx.clearRect(0,0,this.width,this.height); this.pushHistory(); },
+  fill(){
+    if (!this.imgURL) return;
+    this.overlayCtx.globalCompositeOperation = 'source-over';
+    this.overlayCtx.fillStyle = '#ef4444';
+    this.overlayCtx.fillRect(0, 0, this.width, this.height);
+    this.pushHistory();
+  },
+  invert(){
+    if (!this.imgURL) return;
+    const d = this.overlayCtx.getImageData(0, 0, this.width, this.height);
+    const a = d.data;
+    for (let i = 0; i < a.length; i += 4){
+      if (a[i+3] > 0) a[i+3] = 0;
+      else { a[i] = 239; a[i+1] = 68; a[i+2] = 68; a[i+3] = 255; }
+    }
+    this.overlayCtx.putImageData(d, 0, 0);
+    this.pushHistory();
+  },
+
+  // 导出：涂抹区 alpha=0（透明），其余 alpha=255 + 白色
+  // 关键：canvas 默认 {alpha: true}，putImageData 保留 alpha，toDataURL('image/png') 输出 RGBA PNG
+  exportCanvas(){
+    if (!this.imgURL) return null;
+    const out = document.createElement('canvas');
+    out.width = this.width; out.height = this.height;
+    // 显式声明 alpha:true（默认就是 true，写出来更明确）
+    const octx = out.getContext('2d', { alpha: true });
+    octx.fillStyle = '#ffffff';
+    octx.fillRect(0, 0, this.width, this.height);
+    const overlay = this.overlayCtx.getImageData(0, 0, this.width, this.height);
+    const outData = octx.getImageData(0, 0, this.width, this.height);
+    const o = overlay.data, d = outData.data;
+    for (let i = 0; i < o.length; i += 4){
+      if (o[i+3] > 0) d[i+3] = 0;
+    }
+    octx.putImageData(outData, 0, 0);
+    return out;
+  },
+
+  // 统计透明像素，用来验证 Alpha 通道有效（接口文档要求遮罩图 Alpha 通道为「是」）
+  alphaStats(canvas){
+    const c = canvas || this.exportCanvas();
+    if (!c) return null;
+    const ctx = c.getContext('2d');
+    const data = ctx.getImageData(0, 0, c.width, c.height).data;
+    let transparent = 0, total = data.length / 4;
+    for (let i = 3; i < data.length; i += 4){
+      if (data[i] < 255) transparent++;
+    }
+    return {
+      total,
+      transparent,
+      hasAlpha: transparent > 0,
+      ratio: transparent / total
+    };
+  },
+
+  export(){
+    const out = this.exportCanvas();
+    if (!out) return toast('请先选择参考图', 'warn');
+    const stats = this.alphaStats(out);
+    const url = out.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = url; a.download = `mask_${this.width}x${this.height}_${Date.now()}.png`; a.click();
+    if (stats.hasAlpha){
+      toast(`✓ 已导出 PNG（含 Alpha 通道，${stats.transparent.toLocaleString()} px 透明，占 ${(stats.ratio*100).toFixed(1)}%）`, 'success', 5000);
+    } else {
+      toast(`⚠ 已导出 PNG，但没有透明像素 — 等同于不涂抹，API 不会重绘任何区域`, 'warn', 6000);
+    }
+  },
+  hasPaint(){
+    if (!this.imgURL) return false;
+    const a = this.overlayCtx.getImageData(0, 0, this.width, this.height).data;
+    for (let i = 3; i < a.length; i += 4) if (a[i] > 0) return true;
+    return false;
+  },
+
+  async saveToForm(){
+    if (!this.imgURL) return toast('请先选择参考图', 'warn');
+    if (!this.hasPaint() && !confirm('当前还没涂抹任何区域，确定要导出空白 mask 吗？')) return;
+    const out = this.exportCanvas();
+    const stats = this.alphaStats(out);
+    const uri = out.toDataURL('image/png');
+    state.maskFile = {
+      name: `editor_mask_${this.width}x${this.height}.png`,
+      dataUri: uri,
+      w: this.width, h: this.height,
+      sizeBytes: Math.round(uri.length * 0.75),
+      alphaStats: stats
+    };
+    $('#maskUrl').value = `[本地文件：${state.maskFile.name}]`;
+    $('#maskThumb').src = uri;
+    $('#maskName').textContent = state.maskFile.name;
+    const alphaTag = stats.hasAlpha
+      ? `<span class="text-emerald-700">✓ Alpha 通道有效（${stats.transparent.toLocaleString()} px 透明）</span>`
+      : `<span class="text-amber-700">⚠ 没有透明像素</span>`;
+    $('#maskMeta').innerHTML = `${fmtBytes(state.maskFile.sizeBytes)} · ${this.width}×${this.height} px · <span class="text-violet-700">来自 Mask 编辑器</span><br/>${alphaTag}`;
+    $('#maskPreview').classList.remove('hidden');
+
+    // 若主页面没有参考图，自动把编辑器源图加为第 1 张参考图
+    if (state.refImages.length === 0 && this.imgURL.startsWith('data:image')){
+      state.refImages.push({
+        id: uid('ref'),
+        name: this.imgName || 'editor-source',
+        dataUri: this.imgURL,
+        isUrl: false,
+        sizeBytes: Math.round(this.imgURL.length * 0.75)
+      });
+      renderRefList();
+      toast('已把编辑器的图作为第 1 张参考图加入主页面', 'info');
+    }
+    if (state.model !== 'gpt-image-2-official'){
+      setModel('gpt-image-2-official');
+      toast('已自动切到 gpt-image-2-official（mask 仅此模型支持）', 'info');
+    }
+    if (stats.hasAlpha){
+      toast(`mask 已保存（含 Alpha 通道，${stats.transparent.toLocaleString()} px 透明）。回去填 prompt 提交即可`, 'success', 5000);
+    } else {
+      toast('⚠ mask 没有透明像素，API 不会重绘任何区域。建议回编辑器涂抹后重新保存。', 'warn', 6000);
+    }
+    switchTab('generate');
+  }
+};
+
+/* ============================================================
+ *  INIT
+ * ========================================================== */
+function init(){
+  // 版本标签
+  $('#versionLabel').textContent = `v${APP_VERSION}`;
+  document.title = `GPT-Image-2 工作台 v${APP_VERSION} · APIMart`;
+
+  loadConfig();
+  $('#apiKey').value = state.apiKey;
+  $('#baseUrl').value = state.baseUrl;
+  $('#concurrency').value = state.concurrency;
+  // 重试配置
+  $('#retryMode').value = state.retry.mode;
+  $('#retryCount').value = state.retry.count;
+  $('#retryDuration').value = state.retry.duration;
+  $('#retryInterval').value = state.retry.interval;
+  $('#retrySkip4xx').checked = !!state.retry.skip4xx;
+  $('#retryCountWrap').classList.toggle('hidden', state.retry.mode !== 'count');
+  $('#retryDurationWrap').classList.toggle('hidden', state.retry.mode !== 'duration');
+  // 启动倒计时刷新（每秒重渲一次 retrying 状态的卡片 + 进行中任务的 eta）
+  setInterval(() => {
+    state.tasks.forEach(t => {
+      if (t.status === 'retrying') renderTaskRow(t);
+      else if (['submitted','processing'].includes(t.status) && t.estimatedTime) renderTaskRow(t);
+    });
+  }, 1000);
+  // 已完成任务的 URL 过期倒计时 — 每分钟刷新一次（粒度足够）
+  setInterval(() => {
+    state.tasks.forEach(t => {
+      if (t.status === 'completed' && t.images?.[0]?.expiresAt) renderTaskRow(t);
+    });
+  }, 60000);
+
+  updateApiKeyStatus();
+  initSizeSelect();
+  initPixelModeSelect();
+  setModel('gpt-image-2');
+  updateSizeHints();
+  renderRefList();
+  renderTasks();
+  renderBalance();
+  renderCostEstimate();
+  renderPriceTable();
+  updateSelectedCount();
+  wireUp();
+
+  if (!state.apiKey){
+    $('#settingsPanel').classList.remove('hidden');
+  } else {
+    refreshBalance(true);
+  }
+}
+init();
+</script>
+</body>
+</html>
