@@ -11,7 +11,7 @@
 <meta name="twitter:card" content="summary" />
 <!-- 安全：CSP 限制脚本/连接来源，防 CDN 被劫持后注入恶意 JS 偷 API Key -->
 <!-- connect-src 用 'https:' 保留兼容性（允许用户自定义 baseUrl 到任意 HTTPS 网关） -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: blob: https:; connect-src 'self' https: data: blob:; worker-src 'self' blob:; font-src 'self' data:; frame-ancestors 'none';" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: blob: https:; connect-src 'self' https: data: blob:; worker-src 'self' blob:; font-src 'self' data:;" />
 <meta http-equiv="X-Content-Type-Options" content="nosniff" />
 <meta name="referrer" content="strict-origin-when-cross-origin" />
 <title>Ling's GPT-Image-2 Studio</title>
@@ -81,7 +81,11 @@
       <div class="md:col-span-4">
         <label class="block text-xs text-slate-500 mb-1">Base URL</label>
         <input id="baseUrl" value="https://api.apimart.ai/v1" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
-        <p class="text-[11px] text-slate-400 mt-1">默认官方网关。必须 HTTPS（仅 localhost 例外），HTTP 明文会泄漏 Key。</p>
+        <div class="flex items-center justify-between gap-2 mt-1 flex-wrap">
+          <p class="text-[11px] text-slate-400">必须 HTTPS（仅 localhost 例外），HTTP 明文会泄漏 Key。</p>
+          <button id="btnResetBaseUrl" type="button" class="text-[10px] text-blue-600 hover:underline shrink-0">↺ 恢复默认</button>
+        </div>
+        <p class="text-[11px] text-amber-700 mt-1 leading-snug">⚠️ official 模型被 Cloudflare 拦截时，部署一个 Cloudflare Worker 反代填这里（看 <code class="bg-amber-100 px-1 rounded">WORKER_SETUP.md</code>），格式：<code class="bg-amber-100 px-1 rounded">https://xxx.workers.dev/v1</code></p>
       </div>
       <div class="md:col-span-2">
         <label class="block text-xs text-slate-500 mb-1">并发上限</label>
@@ -1134,9 +1138,21 @@ window.dispatchEvent(new Event('maskAIReady'));
 /* ============================================================
  *  VERSION & CHANGELOG
  * ========================================================== */
-const APP_VERSION = '0.14.0';
-const APP_RELEASE_DATE = '2026-05-16';
+const APP_VERSION = '0.14.1';
+const APP_RELEASE_DATE = '2026-05-17';
 const APP_CHANGELOG = [
+  {
+    version: '0.14.1', date: '2026-05-17',
+    title: 'Cloudflare Worker 反代方案 + CSP 清理',
+    changes: [
+      '【新增】Base URL 输入框旁加「↺ 恢复默认」按钮，一键回到 https://api.apimart.ai/v1',
+      '【新增】Base URL 下方加 Worker 反代说明（official 被 Cloudflare 拦截时的解决方案）',
+      '【文档】apimart-cors-proxy.worker.js — 完整可用的 Cloudflare Worker 反代脚本',
+      '【文档】WORKER_SETUP.md — 小白版 10 分钟部署教程（注册 → 创建 → 粘代码 → 验证）',
+      '【清理】移除 CSP meta 里的 frame-ancestors（meta tag 不支持只能 HTTP header，刷无用 warn）',
+      '【背景】APIMart 的 official 路径被 Cloudflare bot 防护拦截，浏览器直连返回 HTML challenge 页 + 无 CORS 头，所以浏览器报 CORS。Worker 是服务器调用不触发 challenge'
+    ]
+  },
   {
     version: '0.14.0', date: '2026-05-16',
     title: '发布准备：CSP / HTTPS 校验 / 危险区 / API Key 风险提示 + 配套文档',
@@ -3182,6 +3198,15 @@ function wireUp(){
     const i = $('#apiKey'); i.type = i.type === 'password' ? 'text' : 'password';
   };
   $('#btnClearKey').onclick = clearConfig;
+  $('#btnResetBaseUrl').onclick = () => {
+    const DEFAULT_BASE = 'https://api.apimart.ai/v1';
+    $('#baseUrl').value = DEFAULT_BASE;
+    $('#baseUrl').classList.remove('border-red-500','bg-red-50');
+    state.baseUrl = DEFAULT_BASE;
+    saveConfig();
+    refreshBalanceDebounced();
+    toast('Base URL 已恢复默认', 'success', 2000);
+  };
   $('#btnClearLocalAll').onclick = () => {
     if (!confirm('⚠️ 确定要清除所有本地数据？\n\n包括：API Key、重试配置、价格表、Prompt 库缓存、收藏、并发设置等。\n\n这个操作不可撤销。')) return;
     if (!confirm('再次确认：所有本机数据将被清除。继续？')) return;
