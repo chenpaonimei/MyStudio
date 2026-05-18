@@ -119,7 +119,7 @@
         </div>
         <div class="md:col-span-2">
           <label class="block text-xs text-slate-500 mb-1">间隔 (秒)</label>
-          <input id="retryInterval" type="number" min="1" max="600" value="5" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          <input id="retryInterval" type="number" min="1" max="600" value="15" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
         </div>
         <div class="md:col-span-3 flex items-end pb-1">
           <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
@@ -132,6 +132,36 @@
         所有失败类型都会按所选模式重试，包括内容审核 / safety / moderation —— 实测多试几次往往能过。<br />
         若确认是 prompt 问题，可在任务卡上点「停止」或直接关闭自动重试。
       </p>
+      <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer mt-2">
+        <input id="respectRetryAfter" type="checkbox" checked class="w-3.5 h-3.5" />
+        服务过载（503/429）时自动遵守服务器要求的等待时间（覆盖上面的间隔）
+      </label>
+    </div>
+
+    <!-- 高级参数 -->
+    <div class="mt-4 pt-3 border-t border-slate-100">
+      <h3 class="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-2">
+        🛠️ 高级
+        <span class="text-[10px] font-normal text-slate-400">不确定就保持默认</span>
+      </h3>
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+        <div class="md:col-span-3">
+          <label class="block text-xs text-slate-500 mb-1">单任务轮询超时（分）</label>
+          <input id="pollTimeoutMin" type="number" min="1" max="60" value="8" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+          <p class="text-[10px] text-slate-400 mt-1">提交后多久没拿到结果就放弃。APIMart 慢的时候调到 15-20。</p>
+        </div>
+        <div class="md:col-span-5 flex items-end pb-1">
+          <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+            <input id="autoCompress" type="checkbox" checked class="w-3.5 h-3.5" />
+            <span>
+              上传参考图时智能压缩大图（&gt; 1 MB 触发）
+              <span class="block text-[10px] text-slate-400 mt-0.5">
+                自动转 JPEG + 必要时 resize，目标 &lt; 2 MB，避开 official 通道的体积阈值
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <!-- 价格表（可折叠） -->
@@ -1138,9 +1168,21 @@ window.dispatchEvent(new Event('maskAIReady'));
 /* ============================================================
  *  VERSION & CHANGELOG
  * ========================================================== */
-const APP_VERSION = '0.14.1';
-const APP_RELEASE_DATE = '2026-05-17';
+const APP_VERSION = '0.14.2';
+const APP_RELEASE_DATE = '2026-05-18';
 const APP_CHANGELOG = [
+  {
+    version: '0.14.2', date: '2026-05-18',
+    title: '官方通道大图修复 + 拥堵自适应 + 超时可配',
+    items: [
+      { type: 'fix', text: '修复 Cloudflare Worker 反代转发 body 时 stream 被跳过的 bug。之前直接传 request.body（ReadableStream），不带 duplex:half 时会被「静默丢失」，导致 APIMart 收到的请求里 model/prompt 字段缺失，报 400 missing parameter。改成 await request.arrayBuffer() 后稳定。请重新部署 apimart-cors-proxy.worker.js。' },
+      { type: 'feat', text: '📦 智能参考图压缩：上传 > 1 MB 的图自动转 JPEG + 必要时 resize（最长边 2048 / 1536 / 1280 分级降级），目标 < 2 MB。避开 gpt-image-2-official 通道对大请求体的阈值限制。设置面板有开关，默认开启。Toast 提示原始 vs 压缩后体积。' },
+      { type: 'feat', text: '🚦 拥堵自适应：识别 503 / 429 错误，解析 Retry-After header 和错误体里的 "retry after N seconds" 文本，自动用服务器要求的等待时间（封顶 5 分钟）。设置面板可关。' },
+      { type: 'feat', text: '⏱ 单任务轮询超时改成可配置：从硬编码 8 分钟变成 1-60 分钟可调（设置 → 高级）。APIMart 慢的时候可以调到 15-20 分钟，避免 official 通道生成慢导致的假超时。' },
+      { type: 'change', text: '默认重试间隔从 5 秒改为 15 秒。APIMart 拥堵时通常要求 10 秒后重试，5 秒太短会反复被拒。' },
+      { type: 'change', text: '错误提示加「服务过载」前缀，503/429 不再显示无意义的英文状态码。' }
+    ]
+  },
   {
     version: '0.14.1', date: '2026-05-17',
     title: 'Cloudflare Worker 反代方案 + CSP 清理',
@@ -1493,7 +1535,9 @@ const PRICES_KEY = 'apimart_gpti2_prices_v1';
 const MAX_REF_IMAGES = 16;
 const POLL_INTERVAL_MS = 4000;
 const POLL_FIRST_DELAY_MS = 8000;
-const POLL_TIMEOUT_MS = 8 * 60 * 1000; // 8 分钟硬上限，避免无限等
+// POLL_TIMEOUT_MS 现在由 state.pollTimeoutMin 控制（默认 8 分钟，1-60 可调）
+// 保留这个常量作为绝对兜底，避免 state 损坏时无限轮询
+const POLL_TIMEOUT_HARD_MAX_MS = 60 * 60 * 1000; // 1 小时硬封顶
 const BALANCE_REFRESH_DEBOUNCE_MS = 1500;
 
 /**
@@ -1536,9 +1580,12 @@ const state = {
     mode: 'off',     // off | count | duration | forever
     count: 3,
     duration: 10,    // 分钟
-    interval: 5,     // 秒
+    interval: 15,    // 秒（默认 15s，避开 APIMart 拥堵时 503 的 10s Retry-After 限制）
     skip4xx: true
   },
+  autoCompress: true,    // 上传参考图时自动智能压缩（> 2 MB 触发）
+  pollTimeoutMin: 8,     // 单任务轮询超时（分钟），1-60 可调
+  respectRetryAfter: true, // 收到 503/429 时自动遵守服务器要求的等待时间
   balance: {
     user: null,        // 用户余额（美元/RMB/Token，看账户配置）
     userUsed: null,
@@ -1564,6 +1611,11 @@ function loadConfig(){
     if (cfg.baseUrl) state.baseUrl = cfg.baseUrl;
     if (cfg.concurrency) state.concurrency = cfg.concurrency;
     if (cfg.retry) Object.assign(state.retry, cfg.retry);
+    if (typeof cfg.autoCompress === 'boolean') state.autoCompress = cfg.autoCompress;
+    if (typeof cfg.pollTimeoutMin === 'number' && cfg.pollTimeoutMin >= 1 && cfg.pollTimeoutMin <= 60) {
+      state.pollTimeoutMin = cfg.pollTimeoutMin;
+    }
+    if (typeof cfg.respectRetryAfter === 'boolean') state.respectRetryAfter = cfg.respectRetryAfter;
   } catch(e){ console.warn(e); }
   try {
     const rawP = localStorage.getItem(PRICES_KEY);
@@ -1578,7 +1630,10 @@ function saveConfig(){
     apiKey: state.apiKey,
     baseUrl: state.baseUrl,
     concurrency: state.concurrency,
-    retry: state.retry
+    retry: state.retry,
+    autoCompress: state.autoCompress,
+    pollTimeoutMin: state.pollTimeoutMin,
+    respectRetryAfter: state.respectRetryAfter
   }));
 }
 function savePrices(){
@@ -1644,6 +1699,92 @@ function fileToDataUri(file){
     fr.onerror = () => reject(fr.error);
     fr.readAsDataURL(file);
   });
+}
+
+/**
+ * dataUri 的字节数估算（base64 解码后的原始字节数）
+ * dataUri 格式：data:image/png;base64,xxx==
+ * base64 长度 → 字节：每 4 个 base64 字符 ≈ 3 字节
+ * 末尾的 = 是 padding，最多 2 个，要扣掉
+ */
+function dataUriBytes(uri){
+  if (!uri || !uri.includes(',')) return 0;
+  const b64 = uri.slice(uri.indexOf(',') + 1);
+  const padding = (b64.match(/=+$/) || [''])[0].length;
+  return Math.floor(b64.length * 3 / 4) - padding;
+}
+
+/**
+ * 智能压缩图片：
+ *   - 小图（< 2MB）直接放过
+ *   - 大图分级降级：保留原尺寸 q0.9 → resize 2048 q0.85 → resize 1536 q0.85 → resize 1280 q0.8
+ *   - 目标：base64 后 ≤ 2MB，避开 APIMart official 通道的体积阈值
+ *
+ * 返回 { dataUri, origBytes, finalBytes, compressed, strategy, origW, origH, finalW, finalH }
+ */
+async function smartCompressImage(file, opts){
+  const targetBytes = (opts && opts.targetBytes) || 2 * 1024 * 1024;
+
+  // 小文件且非 PNG 直接放过（PNG 即使小也常能进一步压缩，但小于 1MB 没必要）
+  if (file.size <= 1024 * 1024){
+    const uri = await fileToDataUri(file);
+    return {
+      dataUri: uri,
+      origBytes: file.size,
+      finalBytes: file.size,
+      compressed: false,
+      strategy: '原图（小于 1MB，跳过压缩）'
+    };
+  }
+
+  // 加载到 Image
+  const origDataUri = await fileToDataUri(file);
+  const img = await new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error('图片解码失败'));
+    i.src = origDataUri;
+  });
+  const origW = img.naturalWidth, origH = img.naturalHeight;
+  const longEdge = Math.max(origW, origH);
+
+  // 分级方案
+  const tries = [
+    { maxLongEdge: longEdge,                  quality: 0.92, label: 'JPEG q0.92（保持原尺寸）' },
+    { maxLongEdge: Math.min(2048, longEdge),  quality: 0.88, label: 'JPEG q0.88（最长边 2048）' },
+    { maxLongEdge: Math.min(1536, longEdge),  quality: 0.85, label: 'JPEG q0.85（最长边 1536）' },
+    { maxLongEdge: Math.min(1280, longEdge),  quality: 0.82, label: 'JPEG q0.82（最长边 1280）' },
+    { maxLongEdge: Math.min(1024, longEdge),  quality: 0.80, label: 'JPEG q0.80（最长边 1024，极限压缩）' }
+  ];
+
+  let lastResult = null;
+  for (const cfg of tries){
+    const scale = cfg.maxLongEdge >= longEdge ? 1 : cfg.maxLongEdge / longEdge;
+    const w = Math.max(1, Math.round(origW * scale));
+    const h = Math.max(1, Math.round(origH * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    // 白底（JPEG 不支持透明，避免黑底）
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const dataUri = canvas.toDataURL('image/jpeg', cfg.quality);
+    const bytes = dataUriBytes(dataUri);
+    lastResult = { dataUri, finalBytes: bytes, w, h, strategy: cfg.label };
+    if (bytes <= targetBytes) break;
+  }
+
+  return {
+    dataUri: lastResult.dataUri,
+    origBytes: file.size,
+    finalBytes: lastResult.finalBytes,
+    compressed: true,
+    strategy: lastResult.strategy,
+    origW, origH,
+    finalW: lastResult.w,
+    finalH: lastResult.h
+  };
 }
 
 /* ============================================================
@@ -1844,9 +1985,33 @@ async function addRefFiles(files){
   for (const f of list){
     if (!f.type.startsWith('image/')){ toast(`已跳过非图片：${f.name}`, 'warn'); continue; }
     try {
-      const dataUri = await fileToDataUri(f);
-      state.refImages.push({ id: uid('ref'), name: f.name, dataUri, isUrl: false, sizeBytes: f.size });
-    } catch(e){ toast(`读取失败：${f.name}`, 'error'); }
+      let dataUri, sizeBytes, origBytes = f.size, compressed = false, strategy = null;
+      // 智能压缩：大文件触发；开关关闭时跳过
+      if (state.autoCompress && f.size > 1024 * 1024){
+        const result = await smartCompressImage(f);
+        dataUri = result.dataUri;
+        sizeBytes = result.finalBytes;
+        compressed = result.compressed;
+        strategy = result.strategy;
+        if (result.compressed){
+          const ratio = ((1 - result.finalBytes / result.origBytes) * 100).toFixed(0);
+          toast(
+            `已压缩 ${f.name}：${fmtBytes(result.origBytes)} → ${fmtBytes(result.finalBytes)}（-${ratio}%，${result.strategy}）`,
+            'success', 5000
+          );
+        }
+      } else {
+        dataUri = await fileToDataUri(f);
+        sizeBytes = f.size;
+      }
+      state.refImages.push({
+        id: uid('ref'), name: f.name, dataUri, isUrl: false,
+        sizeBytes, origBytes, compressed, strategy
+      });
+    } catch(e){
+      console.error('[addRefFiles]', e);
+      toast(`读取/压缩失败：${f.name} - ${e.message || e}`, 'error');
+    }
   }
   renderRefList();
 }
@@ -2245,7 +2410,28 @@ async function submitTask(t){
     try { data = JSON.parse(text); } catch { data = { _raw: text }; }
     if (!resp.ok){
       const msg = data?.error?.message || data?.message || data?._raw || `HTTP ${resp.status}`;
-      throw Object.assign(new Error(msg), { code: data?.code || resp.status, type: data?.error?.type, raw: data });
+      // 抓 Retry-After header（数字秒 或 HTTP-date），用于 503/429 等服务过载场景
+      let retryAfterSec = null;
+      const ra = resp.headers.get('Retry-After');
+      if (ra){
+        const n = parseInt(ra, 10);
+        if (!isNaN(n) && n > 0 && n < 3600) retryAfterSec = n;
+      }
+      // 也从错误体里抓 "retry after N seconds" 文本（APIMart 等会写在 message 里）
+      if (retryAfterSec == null){
+        const m = String(msg).match(/retry\s*after\s*(\d{1,3})\s*seconds?/i);
+        if (m){
+          const n = parseInt(m[1], 10);
+          if (n > 0 && n < 3600) retryAfterSec = n;
+        }
+      }
+      throw Object.assign(new Error(msg), {
+        code: data?.code || resp.status,
+        type: data?.error?.type,
+        raw: data,
+        httpStatus: resp.status,
+        retryAfterSec
+      });
     }
     const taskId = data?.data?.[0]?.task_id || data?.data?.task_id || data?.task_id;
     if (!taskId) throw new Error('提交成功但未返回 task_id：' + (text.slice(0,200)));
@@ -2289,10 +2475,17 @@ async function pollTick(){
   try {
     const now = Date.now();
 
-    // 超时回收
+    // 超时回收 — 用 state.pollTimeoutMin 算，硬封顶 1 小时
+    const timeoutMs = Math.min(
+      Math.max(1, state.pollTimeoutMin || 8) * 60 * 1000,
+      POLL_TIMEOUT_HARD_MAX_MS
+    );
     for (const t of state.tasks){
-      if (['submitted','processing'].includes(t.status) && t.submittedAt && (now - t.submittedAt) > POLL_TIMEOUT_MS){
-        handleTaskFailure(t, Object.assign(new Error('轮询超时（>8 分钟）'), {code:'TIMEOUT'}));
+      if (['submitted','processing'].includes(t.status) && t.submittedAt && (now - t.submittedAt) > timeoutMs){
+        handleTaskFailure(
+          t,
+          Object.assign(new Error(`轮询超时（>${(timeoutMs/60000).toFixed(0)} 分钟），可在「设置 → 高级」调整`), {code:'TIMEOUT'})
+        );
         state.activeCount--;
         pumpQueue();
       }
@@ -2566,10 +2759,20 @@ function handleTaskFailure(t, err){
   if (/Failed to fetch|NetworkError|TypeError/.test(message)){
     message = `网络错误（可能是 CORS 被浏览器拦截）：${message}`;
   }
+  // 503/429 拥堵友好提示
+  const httpStatus = err?.httpStatus || (typeof err?.code === 'number' ? err.code : null);
+  const isOverload = httpStatus === 503 || httpStatus === 429 ||
+                     /overloaded|service\s+unavailable|too\s+many\s+requests|rate\s*limit/i.test(message);
+  if (isOverload){
+    if (!/服务过载|拥堵/.test(message)){
+      message = `服务过载（HTTP ${httpStatus || '?'}）：${message}`;
+    }
+  }
   t.error = {
     code: err?.code ?? '—',
     message,
-    type: err?.type
+    type: err?.type,
+    retryAfterSec: err?.retryAfterSec ?? null
   };
   if (!t.firstFailedAt) t.firstFailedAt = Date.now();
 
@@ -2577,10 +2780,20 @@ function handleTaskFailure(t, err){
   const decision = shouldAutoRetry(t);
   if (decision.retry){
     const r = effectiveRetry(t);
+    // 计算实际等待秒数：默认用户设的 interval；若 503/429 + respectRetryAfter 开启 + 收到 Retry-After，用 max
+    let waitSec = r.interval;
+    if (state.respectRetryAfter && err?.retryAfterSec){
+      // 服务器要求的优先，但封顶 5 分钟，避免脏数据
+      waitSec = Math.max(r.interval, Math.min(err.retryAfterSec, 300));
+    }
     t.autoRetryCount = (t.autoRetryCount || 0) + 1;
     t.status = 'retrying';
-    t.nextRetryAt = Date.now() + r.interval * 1000;
+    t.nextRetryAt = Date.now() + waitSec * 1000;
     renderTaskRow(t);
+    // 拥堵时友好 toast
+    if (isOverload && err?.retryAfterSec){
+      toast(`服务过载，${waitSec} 秒后自动重试（服务器要求 ${err.retryAfterSec}s）`, 'warn', 5000);
+    }
     const handle = setTimeout(() => {
       state.retryTimers.delete(t.id);
       // 重置任务，重新走提交流程
@@ -2596,7 +2809,7 @@ function handleTaskFailure(t, err){
       state.pendingQueue.push(t);
       renderTaskRow(t);
       pumpQueue();
-    }, r.interval * 1000);
+    }, waitSec * 1000);
     state.retryTimers.set(t.id, handle);
     return;
   }
@@ -3232,6 +3445,13 @@ function wireUp(){
   $('#retryDuration').oninput = (e) => { state.retry.duration = Math.max(1, Math.min(1440, parseInt(e.target.value||'1',10))); saveConfig(); };
   $('#retryInterval').oninput = (e) => { state.retry.interval = Math.max(1, Math.min(600, parseInt(e.target.value||'1',10))); saveConfig(); };
   $('#retrySkip4xx').onchange = (e) => { state.retry.skip4xx = !!e.target.checked; saveConfig(); };
+  $('#respectRetryAfter').onchange = (e) => { state.respectRetryAfter = !!e.target.checked; saveConfig(); };
+  // 高级
+  $('#pollTimeoutMin').oninput = (e) => {
+    state.pollTimeoutMin = Math.max(1, Math.min(60, parseInt(e.target.value||'8',10)));
+    saveConfig();
+  };
+  $('#autoCompress').onchange = (e) => { state.autoCompress = !!e.target.checked; saveConfig(); };
 
   // mask 上传
   $('#btnUploadMask').onclick = () => $('#maskFileInput').click();
@@ -4570,6 +4790,10 @@ function init(){
   $('#retrySkip4xx').checked = !!state.retry.skip4xx;
   $('#retryCountWrap').classList.toggle('hidden', state.retry.mode !== 'count');
   $('#retryDurationWrap').classList.toggle('hidden', state.retry.mode !== 'duration');
+  $('#respectRetryAfter').checked = !!state.respectRetryAfter;
+  // 高级
+  $('#pollTimeoutMin').value = state.pollTimeoutMin;
+  $('#autoCompress').checked = !!state.autoCompress;
   // 启动倒计时刷新（每秒重渲一次 retrying 状态的卡片 + 进行中任务的 eta）
   setInterval(() => {
     state.tasks.forEach(t => {
