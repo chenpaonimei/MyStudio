@@ -446,12 +446,21 @@
 
         <!-- 工具 -->
         <div class="mb-3">
-          <label class="block text-xs text-slate-500 mb-1">工具 (快捷键 B / E)</label>
+          <label class="block text-xs text-slate-500 mb-1">工具</label>
           <div class="grid grid-cols-2 gap-1">
-            <button data-tool="brush"  class="mask-tool px-2 py-2 text-sm rounded-lg border border-slate-300 bg-blue-50 text-blue-700 border-blue-300">🖌 涂抹</button>
-            <button data-tool="eraser" class="mask-tool px-2 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50">🧽 擦除</button>
+            <button data-tool="brush"  class="mask-tool px-2 py-2 text-sm rounded-lg border border-slate-300 bg-blue-50 text-blue-700 border-blue-300" title="B">🖌 涂抹</button>
+            <button data-tool="eraser" class="mask-tool px-2 py-2 text-sm rounded-lg border border-slate-300 hover:bg-slate-50" title="E">🧽 擦除</button>
           </div>
-          <p class="text-[11px] text-slate-400 mt-1">涂抹 = 这块要重绘（导出后为透明区）</p>
+          <div class="grid grid-cols-3 gap-1 mt-1">
+            <button data-tool="rect"     class="mask-tool px-1.5 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50" title="R · 矩形选区">▢ 矩形</button>
+            <button data-tool="lasso"    class="mask-tool px-1.5 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50" title="L · 多边形套索（点击锁点，Enter/双击闭合）">✎ 套索</button>
+            <button data-tool="magnetic" class="mask-tool px-1.5 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-50" title="M · 磁性套索（沿边缘吸附）">🧲 磁性</button>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-1">
+            涂抹 = 这块要重绘（导出后为透明区）<br>
+            <span class="text-slate-500">快捷键 B/E/R/L/M 切换工具 · Enter 闭合 · ESC 取消 · Backspace 撤一个锚点</span>
+          </p>
+          <div id="selectionStatus" class="hidden mt-1.5 px-2 py-1.5 rounded bg-blue-50 border border-blue-200 text-[11px] text-blue-800"></div>
         </div>
 
         <!-- 笔刷大小 -->
@@ -1168,9 +1177,20 @@ window.dispatchEvent(new Event('maskAIReady'));
 /* ============================================================
  *  VERSION & CHANGELOG
  * ========================================================== */
-const APP_VERSION = '0.14.2';
+const APP_VERSION = '0.15.0';
 const APP_RELEASE_DATE = '2026-05-18';
 const APP_CHANGELOG = [
+  {
+    version: '0.15.0', date: '2026-05-18',
+    title: 'Mask 编辑器 · 矩形 / 多边形套索 / 磁性套索三件套',
+    items: [
+      { type: 'feat', text: '▢ 矩形选区：按住拖动框选 → 松开自动填充。覆盖整片背景或全屏区域时最快。快捷键 R。' },
+      { type: 'feat', text: '✎ 多边形套索：点击锁定锚点 → Enter / 双击 / 点回起点闭合 → 内部填充。Backspace 撤一个锚点，ESC 取消。不规则物体边界手动选区最实用。快捷键 L。' },
+      { type: 'feat', text: '🧲 磁性套索：基于 Sobel 边缘检测 + 局部 12 px 半径吸附。鼠标只要靠近物体边缘，锚点会自动吸到最近的强边缘点上。简单边界（人和背景对比明显）效果接近 PS；半透明 / 模糊边可能不如 PS。快捷键 M。' },
+      { type: 'feat', text: '三个工具共享：锚点小圆点 / 起点空心圆提示可点回闭合 / 已锁折线实线 + 未锁预览虚线 / 状态栏实时提示「已锁 N 点」。' },
+      { type: 'change', text: '换图 / 清空图时自动清理未闭合的选区 + 失效 Sobel 缓存。Sobel 默认对 ≤ 1024 长边运算，4K 大图也只用 50-200 ms 完成。' }
+    ]
+  },
   {
     version: '0.14.2', date: '2026-05-18',
     title: '官方通道大图修复 + 拥堵自适应 + 超时可配',
@@ -3665,6 +3685,18 @@ const maskEditor = {
   zoom: 1,
   minZoom: 0.1,
   maxZoom: 10,
+  // 选区工具状态（rect / lasso / magnetic 共用）
+  rectStart: null,    // {x, y} 矩形起点（拖拽中）
+  rectEnd: null,      // {x, y} 矩形当前终点
+  lassoPoints: [],    // [{x, y}, ...] 已锁定的多边形锚点
+  lassoLive: null,    // {x, y} 当前自由端（光标位置，可能已吸附）
+  // 磁性套索：Sobel 边缘图缓存
+  sobelMap: null,     // Uint8ClampedArray
+  sobelW: 0, sobelH: 0,
+  sobelScale: 1,
+  // 吸附半径（原图像素）
+  snapRadius: 12,
+  snapThreshold: 30,  // Sobel 强度阈值，低于此值不吸附
 
   init(){
     if (this.initialized) return;
@@ -3816,6 +3848,35 @@ const maskEditor = {
       if (mod && e.key === '1')                    { this.zoomActual();  e.preventDefault(); return; }
       if (e.key === 'b' || e.key === 'B') { this.setTool('brush'); e.preventDefault(); }
       else if (e.key === 'e' || e.key === 'E') { this.setTool('eraser'); e.preventDefault(); }
+      else if (e.key === 'r' || e.key === 'R') { if (!mod) { this.setTool('rect'); e.preventDefault(); } }
+      else if (e.key === 'l' || e.key === 'L') { this.setTool('lasso'); e.preventDefault(); }
+      else if (e.key === 'm' || e.key === 'M') { this.setTool('magnetic'); e.preventDefault(); }
+      else if (e.key === 'Enter') {
+        if ((this.tool === 'lasso' || this.tool === 'magnetic') && this.lassoPoints.length >= 3){
+          this.closeLasso(); e.preventDefault();
+        }
+      }
+      else if (e.key === 'Escape') {
+        if (this.lassoPoints.length > 0 || this.rectStart){
+          this.cancelSelection(); e.preventDefault();
+        }
+      }
+      else if (e.key === 'Backspace') {
+        if ((this.tool === 'lasso' || this.tool === 'magnetic') && this.lassoPoints.length > 0){
+          this.lassoPoints.pop();
+          if (this.lassoPoints.length === 0){
+            this.lassoLive = null;
+            this.clearCursor();
+            this.updateSelectionStatusForTool();
+          } else {
+            this.drawSelectionPreview();
+            this.updateSelectionStatus(
+              `${this.tool === 'magnetic' ? '🧲' : '✎'} 已锁 ${this.lassoPoints.length} 点 · Enter/双击闭合 · ESC 取消 · Backspace 撤一个`
+            );
+          }
+          e.preventDefault();
+        }
+      }
       else if (e.key === '[') { this.adjustBrush(-10); e.preventDefault(); }
       else if (e.key === ']') { this.adjustBrush(10); e.preventDefault(); }
       else if (mod && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) { this.undo(); e.preventDefault(); }
@@ -3824,6 +3885,16 @@ const maskEditor = {
   },
 
   setTool(t){
+    // 切换工具前如果有未闭合的套索，提示一下
+    if (this.lassoPoints.length > 0 && (this.tool === 'lasso' || this.tool === 'magnetic') && t !== this.tool){
+      // 静默丢弃，避免打断用户
+      this.cancelSelection();
+    }
+    if (this.rectStart && t !== 'rect'){
+      this.rectStart = null;
+      this.rectEnd = null;
+      this.clearCursor();
+    }
     this.tool = t;
     $$('.mask-tool').forEach(b => {
       const active = b.dataset.tool === t;
@@ -3831,6 +3902,58 @@ const maskEditor = {
       b.classList.toggle('text-blue-700', active);
       b.classList.toggle('border-blue-300', active);
     });
+    // 切换到磁性套索 → 异步构建 Sobel 边缘图（如果还没建）
+    if (t === 'magnetic' && this.imgURL && !this.sobelMap){
+      this.updateSelectionStatus('🧲 正在分析图像边缘…');
+      // 用 setTimeout 让 UI 先更新
+      setTimeout(() => {
+        try {
+          this.buildSobelMap();
+          this.updateSelectionStatus(`🧲 磁性套索就绪 · 点击锁点 · Enter / 双击闭合 · ESC 取消`);
+        } catch(err){
+          console.warn('[Sobel]', err);
+          this.updateSelectionStatus('⚠️ 边缘分析失败，磁性吸附不可用，将以普通套索方式工作', true);
+        }
+      }, 30);
+    } else {
+      this.updateSelectionStatusForTool();
+    }
+  },
+
+  updateSelectionStatusForTool(){
+    const map = {
+      brush: null,
+      eraser: null,
+      rect: '▢ 矩形选区 · 按住拖动框选 · 松开自动填充',
+      lasso: '✎ 多边形套索 · 点击锁点 · Enter / 双击 / 点回起点闭合 · ESC 取消',
+      magnetic: this.sobelMap
+        ? '🧲 磁性套索 · 点击锁点（自动吸附边缘）· Enter / 双击闭合 · ESC 取消'
+        : null
+    };
+    this.updateSelectionStatus(map[this.tool]);
+  },
+
+  updateSelectionStatus(text, isWarn = false){
+    const el = $('#selectionStatus');
+    if (!el) return;
+    if (!text){ el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.textContent = text;
+    el.classList.toggle('bg-amber-50', isWarn);
+    el.classList.toggle('border-amber-200', isWarn);
+    el.classList.toggle('text-amber-800', isWarn);
+    el.classList.toggle('bg-blue-50', !isWarn);
+    el.classList.toggle('border-blue-200', !isWarn);
+    el.classList.toggle('text-blue-800', !isWarn);
+  },
+
+  cancelSelection(){
+    this.lassoPoints = [];
+    this.lassoLive = null;
+    this.rectStart = null;
+    this.rectEnd = null;
+    this.clearCursor();
+    this.updateSelectionStatusForTool();
   },
 
   adjustBrush(delta){
@@ -3875,6 +3998,9 @@ const maskEditor = {
     this.overlayCtx.clearRect(0, 0, this.width, this.height);
     this.history = []; this.historyIdx = -1;
     this.pushHistory();
+    // 图像换了 → 失效 Sobel 缓存 + 清未闭合选区
+    this.invalidateSobel();
+    this.cancelSelection();
 
     $('#maskCanvasEmpty').classList.add('hidden');
     $('#maskCanvasStack').classList.remove('hidden');
@@ -3887,6 +4013,18 @@ const maskEditor = {
     this.fitToWindow();
     this.updateImageInfo();
     this.updateHistoryInfo();
+    // 如果当前是磁性套索工具，重新构建 Sobel
+    if (this.tool === 'magnetic'){
+      this.updateSelectionStatus('🧲 正在分析图像边缘…');
+      setTimeout(() => {
+        try {
+          this.buildSobelMap();
+          this.updateSelectionStatus('🧲 磁性套索就绪 · 点击锁点 · Enter / 双击闭合 · ESC 取消');
+        } catch(err){
+          this.updateSelectionStatus('⚠️ 边缘分析失败，磁性吸附不可用', true);
+        }
+      }, 30);
+    }
   },
 
   // 清除当前编辑器中的参考图（不影响主页面）
@@ -3904,6 +4042,8 @@ const maskEditor = {
     this.history = [];
     this.historyIdx = -1;
     this.zoom = 1;
+    this.invalidateSobel();
+    this.cancelSelection();
     $('#maskCanvasEmpty').classList.remove('hidden');
     $('#maskCanvasStack').classList.add('hidden');
     $('#maskZoomToolbar').classList.add('hidden');
@@ -4060,16 +4200,69 @@ const maskEditor = {
   startDraw(e){
     if (!this.imgURL) return;
     e.preventDefault();
+    const { x, y } = this.getCanvasCoords(e);
+    // 套索类工具：单击 = 锁点；双击 = 闭合
+    if (this.tool === 'lasso' || this.tool === 'magnetic'){
+      // 检测是否双击（按 detail 字段 / pointerdown 事件 detail 自带）
+      if (e.detail >= 2 && this.lassoPoints.length >= 2){
+        this.closeLasso();
+        return;
+      }
+      // 点击靠近起点 → 闭合
+      if (this.lassoPoints.length >= 3){
+        const p0 = this.lassoPoints[0];
+        const dx = x - p0.x, dy = y - p0.y;
+        const snapPx = Math.max(8, 12 / this.zoom);
+        if (Math.hypot(dx, dy) < snapPx){
+          this.closeLasso();
+          return;
+        }
+      }
+      // 锁定一个锚点（磁性时先吸附）
+      const anchor = (this.tool === 'magnetic') ? this.snapToEdge(x, y) : { x, y };
+      this.lassoPoints.push(anchor);
+      this.lassoLive = anchor;
+      this.drawSelectionPreview();
+      this.updateSelectionStatus(
+        `${this.tool === 'magnetic' ? '🧲 磁性套索' : '✎ 套索'} · 已锁 ${this.lassoPoints.length} 点 · Enter/双击闭合 · ESC 取消 · Backspace 撤一个`
+      );
+      return;
+    }
+    // 矩形：按下=起点
+    if (this.tool === 'rect'){
+      this.overlayCanvas.setPointerCapture?.(e.pointerId);
+      this.drawing = true;
+      this.rectStart = { x, y };
+      this.rectEnd = { x, y };
+      return;
+    }
+    // 默认：brush / eraser
     this.overlayCanvas.setPointerCapture?.(e.pointerId);
     this.drawing = true;
-    const { x, y } = this.getCanvasCoords(e);
     this.lastX = x; this.lastY = y;
     this.drawAt(x, y);
   },
   draw(e){
+    if (!this.imgURL) return;
+    const { x, y } = this.getCanvasCoords(e);
+    // 套索类：实时更新 live 点（不锁定）
+    if (this.tool === 'lasso' || this.tool === 'magnetic'){
+      if (this.lassoPoints.length === 0) return; // 未开始
+      e.preventDefault();
+      this.lassoLive = (this.tool === 'magnetic') ? this.snapToEdge(x, y) : { x, y };
+      this.drawSelectionPreview();
+      return;
+    }
+    // 矩形：拖动中更新终点
+    if (this.tool === 'rect' && this.drawing){
+      e.preventDefault();
+      this.rectEnd = { x, y };
+      this.drawSelectionPreview();
+      return;
+    }
+    // 默认：brush/eraser
     if (!this.drawing) return;
     e.preventDefault();
-    const { x, y } = this.getCanvasCoords(e);
     const dx = x - this.lastX, dy = y - this.lastY;
     const dist = Math.hypot(dx, dy);
     const step = Math.max(1, this.brushSize / 6);
@@ -4083,6 +4276,19 @@ const maskEditor = {
     this.lastX = x; this.lastY = y;
   },
   endDraw(e){
+    // 套索类 pointerup 不结束（锚点是 down 时加，闭合是 Enter/双击/点回起点）
+    if (this.tool === 'lasso' || this.tool === 'magnetic'){
+      return;
+    }
+    // 矩形：松开 = 完成框选 + 填充
+    if (this.tool === 'rect'){
+      if (!this.drawing) return;
+      this.drawing = false;
+      try { this.overlayCanvas.releasePointerCapture?.(e?.pointerId); } catch(_){}
+      this.commitRect();
+      return;
+    }
+    // 默认：brush/eraser
     if (!this.drawing) return;
     this.drawing = false;
     try { this.overlayCanvas.releasePointerCapture?.(e?.pointerId); } catch(_){}
@@ -4111,8 +4317,223 @@ const maskEditor = {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
     }
   },
+  // ========== 选区工具 ==========
+  commitRect(){
+    if (!this.rectStart || !this.rectEnd) return;
+    const { x: x1, y: y1 } = this.rectStart;
+    const { x: x2, y: y2 } = this.rectEnd;
+    const x = Math.min(x1, x2), y = Math.min(y1, y2);
+    const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+    if (w < 2 || h < 2){
+      // 太小，忽略（防止误点）
+      this.rectStart = null; this.rectEnd = null;
+      this.clearCursor();
+      return;
+    }
+    const ctx = this.overlayCtx;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(x, y, w, h);
+    this.rectStart = null;
+    this.rectEnd = null;
+    this.clearCursor();
+    this.pushHistory();
+  },
+
+  closeLasso(){
+    if (this.lassoPoints.length < 3){
+      toast('套索至少需要 3 个锚点才能闭合', 'warn');
+      return;
+    }
+    this.fillPolygon(this.lassoPoints);
+    this.lassoPoints = [];
+    this.lassoLive = null;
+    this.clearCursor();
+    this.pushHistory();
+    this.updateSelectionStatusForTool();
+  },
+
+  fillPolygon(points){
+    const ctx = this.overlayCtx;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++){
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.closePath();
+    ctx.fill('evenodd');
+  },
+
+  drawSelectionPreview(){
+    const ctx = this.cursorCtx;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const lw = Math.max(0.5, 1.5 / this.zoom);
+    // 矩形预览（虚线）
+    if (this.tool === 'rect' && this.rectStart && this.rectEnd){
+      const { x: x1, y: y1 } = this.rectStart;
+      const { x: x2, y: y2 } = this.rectEnd;
+      const x = Math.min(x1, x2), y = Math.min(y1, y2);
+      const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = lw;
+      ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      // 半透明预览填充
+      ctx.fillStyle = 'rgba(239,68,68,0.15)';
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+    // 套索预览
+    if ((this.tool === 'lasso' || this.tool === 'magnetic') && this.lassoPoints.length){
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = lw;
+      ctx.setLineDash([]);
+      // 已锁定折线
+      ctx.beginPath();
+      ctx.moveTo(this.lassoPoints[0].x, this.lassoPoints[0].y);
+      for (let i = 1; i < this.lassoPoints.length; i++){
+        ctx.lineTo(this.lassoPoints[i].x, this.lassoPoints[i].y);
+      }
+      ctx.stroke();
+      // 从最后锚点到自由端（虚线，区别已锁部分）
+      if (this.lassoLive){
+        const last = this.lassoPoints[this.lassoPoints.length - 1];
+        ctx.beginPath();
+        ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(this.lassoLive.x, this.lassoLive.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // 锚点小圆点
+      ctx.fillStyle = '#3b82f6';
+      for (const p of this.lassoPoints){
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(2, 3 / this.zoom), 0, Math.PI*2);
+        ctx.fill();
+      }
+      // 起点醒目（空心大圆，提示用户点击它闭合）
+      const p0 = this.lassoPoints[0];
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = Math.max(1, 1.5 / this.zoom);
+      ctx.beginPath();
+      ctx.arc(p0.x, p0.y, Math.max(5, 7 / this.zoom), 0, Math.PI*2);
+      ctx.stroke();
+      // 磁性自由端额外画一个小标记
+      if (this.tool === 'magnetic' && this.lassoLive){
+        ctx.fillStyle = 'rgba(59,130,246,0.7)';
+        ctx.beginPath();
+        ctx.arc(this.lassoLive.x, this.lassoLive.y, Math.max(2, 3 / this.zoom), 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  },
+
+  // ========== 磁性套索：Sobel 边缘检测 + 局部吸附 ==========
+  buildSobelMap(){
+    if (!this.imgURL || !this.imgCanvas) return;
+    const t0 = performance.now();
+    // 把原图缩放到不超过 1024 长边再算 Sobel，提速
+    const MAX = 1024;
+    const longEdge = Math.max(this.width, this.height);
+    const scale = Math.min(1, MAX / longEdge);
+    const sw = Math.max(8, Math.round(this.width * scale));
+    const sh = Math.max(8, Math.round(this.height * scale));
+
+    const cv = document.createElement('canvas');
+    cv.width = sw; cv.height = sh;
+    const cx = cv.getContext('2d');
+    cx.drawImage(this.imgCanvas, 0, 0, sw, sh);
+    const src = cx.getImageData(0, 0, sw, sh).data;
+
+    // 灰度（Float32 一次性预算，避免重复计算）
+    const gray = new Float32Array(sw * sh);
+    for (let i = 0, j = 0; i < src.length; i += 4, j++){
+      gray[j] = src[i] * 0.299 + src[i+1] * 0.587 + src[i+2] * 0.114;
+    }
+
+    // Sobel 3x3
+    const out = new Uint8ClampedArray(sw * sh);
+    for (let y = 1; y < sh - 1; y++){
+      const yr = y * sw;
+      const ya = (y - 1) * sw, yb = (y + 1) * sw;
+      for (let x = 1; x < sw - 1; x++){
+        const tl = gray[ya + x - 1], tc = gray[ya + x], tr = gray[ya + x + 1];
+        const ml = gray[yr + x - 1],                   mr = gray[yr + x + 1];
+        const bl = gray[yb + x - 1], bc = gray[yb + x], br = gray[yb + x + 1];
+        const gx = -tl - 2*ml - bl + tr + 2*mr + br;
+        const gy = -tl - 2*tc - tr + bl + 2*bc + br;
+        const mag = Math.hypot(gx, gy);
+        out[yr + x] = mag > 255 ? 255 : mag;
+      }
+    }
+
+    this.sobelMap = out;
+    this.sobelW = sw;
+    this.sobelH = sh;
+    this.sobelScale = scale;
+    const dt = (performance.now() - t0).toFixed(0);
+    console.log(`[Sobel] built ${sw}×${sh} edge map in ${dt}ms`);
+  },
+
+  snapToEdge(x, y){
+    if (!this.sobelMap) return { x, y };
+    const cx0 = Math.round(x * this.sobelScale);
+    const cy0 = Math.round(y * this.sobelScale);
+    const sR = Math.max(2, Math.round(this.snapRadius * this.sobelScale));
+    let best = this.snapThreshold;
+    let bx = cx0, by = cy0;
+    for (let dy = -sR; dy <= sR; dy++){
+      const yy = cy0 + dy;
+      if (yy < 0 || yy >= this.sobelH) continue;
+      const r2 = sR * sR;
+      const yr = yy * this.sobelW;
+      for (let dx = -sR; dx <= sR; dx++){
+        if (dx*dx + dy*dy > r2) continue;
+        const xx = cx0 + dx;
+        if (xx < 0 || xx >= this.sobelW) continue;
+        const v = this.sobelMap[yr + xx];
+        if (v > best){ best = v; bx = xx; by = yy; }
+      }
+    }
+    // 把回到原图坐标
+    return { x: bx / this.sobelScale, y: by / this.sobelScale };
+  },
+
+  // 当图像变化时（重新加载 / 清空）让 Sobel 失效
+  invalidateSobel(){
+    this.sobelMap = null;
+    this.sobelW = 0;
+    this.sobelH = 0;
+  },
+
   drawCursor(e){
     if (!this.imgURL) return;
+    // 选区工具：cursor 层由 drawSelectionPreview 管理，不画圆光标
+    if (this.tool === 'rect' || this.tool === 'lasso' || this.tool === 'magnetic'){
+      // 套索类要保留 preview，所以不 clear；只更新自由端
+      if ((this.tool === 'lasso' || this.tool === 'magnetic') && this.lassoPoints.length > 0){
+        const { x, y } = this.getCanvasCoords(e);
+        this.lassoLive = (this.tool === 'magnetic') ? this.snapToEdge(x, y) : { x, y };
+        this.drawSelectionPreview();
+      }
+      // 磁性吸附预览（无锚点时也显示当前会吸到哪）
+      if (this.tool === 'magnetic' && this.lassoPoints.length === 0 && this.sobelMap){
+        const { x, y } = this.getCanvasCoords(e);
+        const snap = this.snapToEdge(x, y);
+        const ctx = this.cursorCtx;
+        ctx.clearRect(0, 0, this.width, this.height);
+        ctx.fillStyle = 'rgba(59,130,246,0.7)';
+        ctx.beginPath();
+        ctx.arc(snap.x, snap.y, Math.max(3, 4 / this.zoom), 0, Math.PI*2);
+        ctx.fill();
+      }
+      return;
+    }
+    // 默认 brush/eraser：画圆形光标
     const { x, y } = this.getCanvasCoords(e);
     const ctx = this.cursorCtx;
     ctx.clearRect(0, 0, this.width, this.height);
