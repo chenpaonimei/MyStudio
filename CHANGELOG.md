@@ -8,6 +8,207 @@
 
 ---
 
+## v0.17.0 — 2026-05-26 · Seedance 2.0 视频生成 + AI 优化 prompt + 品牌升级
+
+整合 APIMart 的 Doubao Seedance 2.0 视频生成接口，把 Studio 从纯图像扩到「图像 + 视频」双形态 AIGC 工作台。同时上线 AI 优化 prompt 功能、外链 Prompt 灵感库、tab 导航重构。
+
+### 品牌升级
+
+- **产品名：** Ling's GPT-Image-2 Studio → **Ling's AIGC Studio**（图像 + 视频 + 未来音频，统一旗下）
+- 文件名保持 `gpt-image-2-studio.html` 不动，避免书签 / GitHub Pages URL 中断
+- header h1、`<title>`、meta description、og:title、动态 document.title 一并改
+
+### 视频生成功能（Doubao Seedance 2.0）
+
+四个模型变体覆盖所有场景：
+
+- `doubao-seedance-2.0` — 标准版，1080p 支持
+- `doubao-seedance-2.0-fast` — 快速版（默认选中，省钱）
+- `doubao-seedance-2.0-face` — 真人版，1080p
+- `doubao-seedance-2.0-fast-face` — 真人快速版
+
+**6 种输入模式**（segmented 切换，UI 自动隐藏不兼容字段）：
+
+1. 文生视频
+2. 图生视频（首帧 1 张图）
+3. 首尾帧（first_frame + last_frame）
+4. 视频参考（≤3 段，总时长 ≤15s）
+5. 多模态混合（图 + 视频 + 音频）
+6. 用素材库（asset_id 引用审核通过的人像）
+
+**字段互斥规则可视化**（避免用户手动组合出 400 请求）：
+
+- `image_urls` ↔ `image_with_roles` 互斥
+- 用 `image_with_roles`（首尾帧）→ `video_urls` / `audio_urls` 全禁
+- `audio_urls` 必须配 `image_urls` 或 `video_urls`
+- `1080p` 仅 `2.0` / `2.0-face` 支持，fast 系列没有
+- `asset://` URL 仅 `2.0` / `2.0-fast` 可用；face 系列必须走真人素材库
+
+**视频任务卡：**
+
+- `<video>` 播放器内嵌（controls + preload="metadata"，海报用 last_frame）
+- 状态徽章：已完成 / 处理中 / 重试 / 失败 / 续写链
+- 任务卡折叠（`<details>`）+ 右上「全部折叠」按钮
+- 任务队列独立滚动（`task-queue-scroll`，max-height + overflow-y）
+- 左侧表单 sticky（宽屏下不跟着滚走）
+
+**素材库（v0.17.0 初版 UI）：**
+
+- 虚拟人像（POST `/v1/seedance2/private-avatar`）：批量上传 ≤20 张 → 审核任务卡 → asset_id 卡片列表（含 Active / Failed 状态）
+- 真人人像（POST `/v1/seedance2/real-avatar`）：4 步进度条 + QR code 大图 + 跨设备轮询 byted_token + 步骤 4 真人视频上传
+- QR code 用纯 SVG 手画，无外部依赖
+- `callback_url` 字段填占位符 `https://example.com/seedance-callback`（纯前端拿不到 webhook，靠轮询查 byted_token）
+
+### Prompt 灵感库（外链卡片导航）
+
+skip iframe，原因：youmind.com 设 `X-Frame-Options: DENY` 拒绝嵌入，atlascloud 也一样。改成 2 张大渐变卡片导航：
+
+- 视频：[youmind](https://youmind.com/seedance-2-0-prompts) + [atlascloud](https://www.atlascloud.ai/prompts-hub/seedance-2-prompt?locale=en)
+- 图像：本地 Prompt 库（v0.16.0 已有 36 条）+ [atlascloud](https://www.atlascloud.ai/prompts-hub/gpt-image-2-prompt?locale=en) 外链卡片
+
+点视频右侧 sub-tab「Prompt 灵感库」自动平滑滚到卡片区。本工具不抓取这两个站的内容、不缓存截图，仅做嵌入/跳转。
+
+### AI 优化 prompt
+
+Prompt 输入框上方加 **split button**（左主按钮触发 + 右 caret 弹 popover 选模型）：
+
+- **GPT-4o-mini**（默认，~$0.0005 / 次）
+- **Claude 3.5 Sonnet**（~$0.01，中文文采好）
+- **GPT-4o**（~$0.02，顶级）
+
+选择 `localStorage('studio.aiModel')` 持久化。按钮 label 实时显示当前模型（`AI 优化 · 4o-mini`）。优化中显示 spinner，完成后 textarea 有 1.2s accent 高亮边框。
+
+**目前是 mock 行为**（fake 1.2-2.4s spinner + 写好的扩写文本）。**v0.17.1 计划接真 API**：POST `{baseUrl}/chat/completions`，复用现有 API Key + Worker 反代，视频 / 图像分别有不同 system prompt。
+
+### Tab 导航重构（inline 横排）
+
+旧：3 个 tab 平铺。新：
+
+```
+[图像生成 ●]│ Mask 编辑器  Prompt 库 │ [视频生成]
+[图像生成]   │ [视频生成 ●]│ Prompt 灵感库 │
+```
+
+主 tab 选中后，对应 sub-tab inline 长出来；切换主 tab，sub-tab 跟着换。视频 sub-tab「Prompt 灵感库」点击 → 平滑滚到 viewVideo 内的卡片区。
+
+### UI / 交互细节补充
+
+- 宽屏：container `max-width` 1280 → 1600px；≥1920 时升到 1800px
+- 深色模式下拉 `<option>` 可读性修复（v0.16.0 选中后未选项接近不可见）
+- 视频价格预估 chip：实时显示「预计 $0.18 · 5s · 720p · fast」
+- 互斥规则速查卡片（底部 7 条规则一目了然）
+
+### 文件 / 备份
+
+- 备份：`gpt-image-2-studio-v0.16.0.bak.html`（v0.16.0 原版，可一键回滚）
+- 主 HTML 体积：408 945 → **479 074 字节**（+70 KB，含视频 tab 全套 UI + token + 22 条新 CSS + 14 个新 SVG icon + AI 优化 JS）
+- 行数：5434 → 6518
+- 设计来源 demo：`studio-video-preview.html`（108 KB / 2088 行，独立可点击预览）
+
+### 回滚方法
+
+```
+cp gpt-image-2-studio-v0.16.0.bak.html gpt-image-2-studio.html
+```
+
+### v0.17.1 路线图（短期）
+
+- AI 优化接 APIMart `/v1/chat/completions` 真实调用 + 视频 / 图像分别的 system prompt
+- 视频任务真接 `/v1/videos/generations` + 轮询 `/v1/tasks/{id}`
+- 视频价格表加进设置面板
+- 视频任务专用轮询超时（默认 15 分，face 模型可达 5+ 分钟）
+- 素材库真接 `/v1/seedance2/private-avatar` + `/v1/seedance2/real-avatar`
+- 真人认证 QR 用 `qrcode-svg` 库（~3KB）生成真 QR
+- 视频任务、素材列表、AI 模型选择 localStorage 持久化
+
+---
+
+## v0.16.0 — 2026-05-22 · UI 大改版：克制玻璃（Restrained Glass）
+
+跟着 `nextlevelbuilder/ui-ux-pro-max-skill` v2.5.0 把界面从「亮色 Tailwind 默认」升到「Cinema Dark + 局部 Glassmorphism + Drawing Canvas 紫调色板」。整体走 skill 推荐的工作台风：Modern Dark (Cinema) 作主体、Glassmorphism 只用在悬浮层（Toast / Tabs / Modal），避免长时间高密度阅读时玻璃后背景跟着滚动闪烁。
+
+### 视觉系统
+
+- **配色：** 双主题。深色版底 `#0a0612 → #120a1f` 紫渐变 + violet `#7c3aed` 主色 + cyan `#06b6d4` 次色；浅色版底 `#faf5ff` lavender + 同主色。两套都自带 ambient blob 慢振荡（28-42 s 周期），`prefers-reduced-motion` 一关全停。
+- **字体：** Inter 300-700 主字体（替换原系统默认）、JetBrains Mono 用作代码 / prompt 显示。中文 fallback 仍是 PingFang / 微软雅黑。
+- **token 体系：** 写成 CSS custom properties。间距 4 pt 基线（`--space-1..8`）、圆角四档（`--radius-sm..xl`）、字阶 8 档、运动 `cubic-bezier(0.16,1,0.3,1)` 全局 easing。
+- **卡片策略：** 大卡片（任务卡、表单、设置面板、Pre-delivery checklist）走 solid `--bg-elevated`，悬浮层（Toast / Tabs / Compare bar / chip）走 `backdrop-filter: blur(20px) saturate(160%)`。原 18 处 blur 收敛到 5-6 处大型surface，性能影响显著降低。
+
+### 主题切换
+
+- 头部新增 sun/moon 切换按钮。
+- `localStorage('studio.theme')` 持久化用户选择。
+- 首次访问按 `prefers-color-scheme` 自动跟随系统。
+- `<html data-theme="dark|light">` 切换驱动所有 token 变化，无需任何脚本重新渲染组件。
+
+### 图标：emoji → Lucide SVG
+
+按 skill `no-emoji-icons` 规则替换 26 个 UI 图标 emoji 为内联 Lucide SVG（25 个 symbol，零外部请求）：
+
+| 原 emoji | Lucide 名 | 用在 |
+|---|---|---|
+| `⚙️ / ⚙` | settings | 设置按钮 |
+| `🚀 / ✨` | sparkles | 生成 tab / AI 提示 |
+| `🎨` | palette | Mask 编辑器 tab |
+| `📚 / 📖` | book-open | Prompt 库 tab / 说明 |
+| `🔁 / 🔄` | refresh-cw | 重试 / 刷新 |
+| `🛠️` | wrench | 高级设置 |
+| `💰` | coins | 价格 / 余额 |
+| `⚠️ / ⚠` | alert-triangle | 警告横幅 |
+| `🔑` | key | API Key |
+| `🗑` | trash-2 | 删除 / 清除 |
+| `👁` | eye | 显示密码 |
+| `📋` | clipboard | 复制 |
+| `✎` | pencil | 编辑 |
+| `❤️` | heart | 收藏 |
+| `🔍` | search | 搜索 |
+| `⏳` | clock | 等待 |
+| `❓` | help-circle | 帮助 |
+| `⬇️` | download | 下载 |
+| `👍` | thumbs-up | 点赞 |
+| `✓` | check | 确认 |
+| `⛶` | maximize | 全屏 |
+| `🧲` | magnet | 磁性套索 |
+| `📁` | folder | 上传 |
+| (新) | sun / moon | 主题切换 |
+
+**保留 emoji**（这些是内容 / 语义分类，不是装饰图标，所以不替换）：
+- `⌘` —— Mac 键盘 Cmd 键提示
+- `👤 🌄 🙂 ✋ 🦶` —— Mask 编辑器 Quick Mask 预设按钮（人物 / 背景 / 头部 / 双手 / 双脚）
+- Prompt 库分类 emoji 🛒 📣 🍌 🧪 等 —— 在 `<script>` 内的字符串字面量里，是 CHANGELOG 文本和分类标签
+
+### 交互：focus / hover / press / motion
+
+- `button:focus-visible` 统一 4 px 双层 ring（外层底色 2 px + 内层 accent 2 px），键盘可见。
+- `button:active` 全局 `scale(0.97)` 反馈，120 ms。
+- Hover transition 180 ms，`var(--ease-out)` 收敛。
+- 文本/数字输入 focus 时边框换 accent + 3 px accent-glow。
+
+### Tailwind 桥接策略
+
+主 HTML 5254 行 / 388 KB 有海量 Tailwind 工具类。这次没改 HTML 上的 class，改用 CSS 选择器把所有 `bg-white / bg-slate-*` / `text-slate-*` / `border-slate-*` / `bg-blue-* / border-blue-*` / `bg-amber-* / bg-rose-*` 重定向到新 token。这样：
+
+- 结构零破坏，回滚成本低
+- 双主题切换瞬间生效
+- 第三方 prompt 渲染（JS 动态生成的 markdown 节点）也自动适配
+
+### 文件 / 备份
+
+- 备份：`gpt-image-2-studio-v0.15.0.bak.html`（与上次 `gpt-image-2-studio-v0.15.0.html` 内容相同，多一份保险）
+- 迁移脚本：`migrate_v0.16.0.py` 保留在 outputs/，可复盘
+- 设计来源 demo：`gpt-image-2-studio-ui-preview.html`（全玻璃 v1）+ `gpt-image-2-studio-ui-preview-v2.html`（克制玻璃 v2，最终采纳）
+- 主 HTML 体积：388 537 → 408 945 字节（+20 KB，含 v2 token + SVG sprite + 主题脚本）
+
+### 回滚方法
+
+```
+cp gpt-image-2-studio-v0.15.0.bak.html gpt-image-2-studio.html
+```
+
+或者用 `gpt-image-2-studio-v0.15.0.html`，二者内容相同。
+
+---
+
 ## v0.15.0 — 2026-05-18 · Mask 编辑器三件套：矩形 / 多边形套索 / 磁性套索
 
 之前 Mask 编辑器只有「涂抹」和「擦除」两个画笔工具，加上 AI 快速选区（人物 / 背景 / 头 / 手 / 脚），但缺少**几何 / 半自动**选区。这次补齐三个最常用的工具，应对画笔太慢、AI 不够精的场景。
