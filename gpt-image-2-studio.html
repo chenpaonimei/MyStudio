@@ -6596,10 +6596,52 @@ init();
   function bindRealEnhance(btnId, areaId, isVideo){
     const btn = document.getElementById(btnId);
     const area = document.getElementById(areaId);
-    if (!btn || !area) return;
+    if (!btn || !area){
+      console.warn('[v0.17.1] enhance: missing btn or area', btnId, areaId);
+      return;
+    }
     // Clone button to remove previous mock listeners
     const newBtn = btn.cloneNode(true);
     btn.parentNode.replaceChild(newBtn, btn);
+
+    // v0.17.3 hotfix: re-bind caret popover (was lost in cloneNode)
+    const split = newBtn.closest('.ai-split');
+    if (split){
+      const caret = split.querySelector('.ai-caret');
+      const popover = split.querySelector('.ai-popover, [data-ai-popover]');
+      const labelSpan = split.querySelector('.aiCurrentModel');
+      const KEY = 'studio.aiModel';
+      const MODELS = {
+        'gpt-4o-mini':       { label: '4o-mini',    cost: '~$0.0005' },
+        'claude-3-5-sonnet': { label: '3.5 Sonnet', cost: '~$0.01' },
+        'gpt-4o':            { label: '4o',         cost: '~$0.02' }
+      };
+      const currentModel = () => {
+        try { return localStorage.getItem(KEY) || 'gpt-4o-mini'; } catch(e){ return 'gpt-4o-mini'; }
+      };
+      const sync = (m) => {
+        try { localStorage.setItem(KEY, m); } catch(e){}
+        if (labelSpan) labelSpan.textContent = '· ' + (MODELS[m] && MODELS[m].label || m);
+        if (popover) popover.querySelectorAll('.ai-model-item').forEach(it => {
+          it.classList.toggle('selected', it.dataset.aiModel === m);
+        });
+      };
+      if (caret && popover){
+        caret.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          popover.classList.toggle('open');
+        });
+        popover.querySelectorAll('.ai-model-item').forEach(item => {
+          item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sync(item.dataset.aiModel);
+            popover.classList.remove('open');
+          });
+        });
+      }
+      sync(currentModel());
+    }
 
     newBtn.addEventListener('click', async (e) => {
       if (e.target.closest && e.target.closest('.ai-caret')) return;
@@ -6952,10 +6994,17 @@ init();
   }
 
   async function submitVideo(){
+    console.log('[v0.17.1] submitVideo called, apiKey configured:', !!state.apiKey);
     if (!state.apiKey){ alert('请先在「设置」里配置 API Key'); return; }
     let body;
-    try { body = buildVideoPayload(); }
-    catch(err){ alert(err.message); return; }
+    try {
+      body = buildVideoPayload();
+      console.log('[v0.17.1] payload built:', body);
+    } catch(err){
+      console.error('[v0.17.1] payload build failed:', err);
+      alert(err.message);
+      return;
+    }
 
     const t = {
       id: 'vt_' + Date.now(),
@@ -7002,19 +7051,27 @@ init();
 
   // ============ Bind submit button ============
   function bindSubmitButton(){
-    // Find primary submit button in video form: btn-primary with "提交生成" text
-    const submitBtns = $$('#viewVideo .btn-primary');
-    submitBtns.forEach(b => {
-      if (b.textContent.includes('提交生成')){
-        b.addEventListener('click', submitVideo);
-        b.dataset.bound = '1';
+    // v0.17.3 hotfix: post-hotfix8, btn-primary class was removed; match by text instead
+    $$('#viewVideo button').forEach(b => {
+      if (b.dataset.submitBound) return;
+      const txt = (b.textContent || '').trim();
+      if (txt.includes('提交生成')){
+        b.dataset.submitBound = '1';
+        b.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          console.log('[v0.17.1] submit button clicked');
+          submitVideo();
+        });
+        console.log('[v0.17.1] submit button bound:', b);
       }
     });
   }
 
   // ============ Virtual avatar batch submit ============
   function bindVirtualAvatarUpload(){
-    // Find "批量上传（≤20）" button in 素材库
+    // DISABLED in v0.17.3 — replaced by file picker version
+    return;
     $$('#viewVideo button').forEach(b => {
       if (b.textContent.includes('批量上传')){
         b.addEventListener('click', async () => {
@@ -7096,6 +7153,15 @@ init();
     // Rebind AI optimize (replace mock)
     bindRealEnhance('btnEnhancePromptImage', 'prompt', false);
     bindRealEnhance('btnEnhancePromptVideo', 'videoPromptArea', true);
+    // v0.17.3 hotfix: global click closes ai-popovers when clicking outside
+    if (!window.__v0173PopoverClickBound){
+      window.__v0173PopoverClickBound = true;
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.ai-split')){
+          document.querySelectorAll('.ai-popover.open, [data-ai-popover].open').forEach(p => p.classList.remove('open'));
+        }
+      });
+    }
     // Upload handlers — DISABLED v0.17.2-hotfix（被 v0.17.2 重写）
     // attachUrlUploaders();
     // Cost calculator
@@ -7120,20 +7186,21 @@ init();
 
 
 
+
 <script>
 /* ============================================================
- *  v0.17.2 hotfix: COMPLETE upload module (click + drag-drop + ImgBB)
- *  Replaces both v0.17.1 URL paste and old v0.17.2 partial impl.
+ *  v0.17.3: COMPLETE upload module
+ *    images   → ImgBB
+ *    videos / audios → Pixeldrain
+ *    asset library batch uploads (虚拟人像 + 真人人像)
+ *    thumbnail preview after upload
  * ========================================================== */
-(function v0172Hotfix(){
-  const IMGBB_KEY_STORAGE = 'studio.imgbbKey';
-  function getImgbbKey(){
-    try { return localStorage.getItem(IMGBB_KEY_STORAGE) || ''; } catch(e){ return ''; }
-  }
-  function setImgbbKey(k){
-    try { localStorage.setItem(IMGBB_KEY_STORAGE, k || ''); } catch(e){}
-  }
+(function v0173(){
+  const IMGBB_KEY = 'studio.imgbbKey';
+  const getImgKey = () => { try { return localStorage.getItem(IMGBB_KEY) || ''; } catch(e){ return ''; } };
+  const setImgKey = (k) => { try { localStorage.setItem(IMGBB_KEY, k || ''); } catch(e){} };
 
+  // ============ File → base64 ============
   function fileToBase64(file){
     return new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -7146,149 +7213,251 @@ init();
       r.readAsDataURL(file);
     });
   }
+  function fileToDataUri(file){
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error('文件读取失败'));
+      r.readAsDataURL(file);
+    });
+  }
 
-  async function uploadToImgbb(file, onProgress){
-    const key = getImgbbKey();
-    if (!key) throw new Error('NO_KEY');
-    if (onProgress) onProgress(10, '转码 base64...');
+  // ============ Upload to ImgBB (images) ============
+  async function uploadImage(file){
+    const key = getImgKey();
+    if (!key) throw new Error('NO_IMGBB_KEY');
+    if (file.size > 32 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_32MB');
     const base64 = await fileToBase64(file);
-    if (onProgress) onProgress(40, '上传 ImgBB...');
     const form = new FormData();
     form.append('key', key);
     form.append('image', base64);
     form.append('name', (file.name || 'upload').replace(/\.[^.]+$/, ''));
-    const resp = await fetch('https://api.imgbb.com/1/upload', {
-      method: 'POST',
-      body: form
-    });
+    const resp = await fetch('https://api.imgbb.com/1/upload', { method: 'POST', body: form });
     const data = await resp.json();
     if (!resp.ok || !data.success){
       throw new Error('ImgBB: ' + ((data.error && data.error.message) || ('HTTP ' + resp.status)));
     }
-    if (onProgress) onProgress(100, '完成');
-    return data.data.url;
+    return {
+      url: data.data.url,
+      thumb: (data.data.thumb && data.data.thumb.url) || data.data.url,
+      size: file.size,
+      name: file.name
+    };
   }
 
+  // ============ Upload to Pixeldrain (videos/audios) ============
+  async function uploadVideoOrAudio(file){
+    if (file.size > 1024 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_1GB');
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch('https://pixeldrain.com/api/file', {
+      method: 'POST',
+      body: form
+    });
+    if (!resp.ok){
+      throw new Error('Pixeldrain HTTP ' + resp.status);
+    }
+    const data = await resp.json();
+    if (!data.id) throw new Error('Pixeldrain: ' + (data.message || '未返回 file id'));
+    return {
+      url: 'https://pixeldrain.com/api/file/' + data.id,
+      thumb: null,  // pixeldrain has /api/file/{id}/thumbnail but it's for images only
+      size: file.size,
+      name: file.name
+    };
+  }
+
+  async function uploadFile(file, kind){
+    if (kind === 'image') return uploadImage(file);
+    return uploadVideoOrAudio(file);
+  }
+
+  // ============ Box utility ============
   function detectKind(box){
     const title = (box.querySelector('.label-title') || {}).textContent || '';
-    if (/视频|video/i.test(title)) return 'video';
+    if (/视频|video|真人/i.test(title)) return 'video';
     if (/音频|audio/i.test(title)) return 'audio';
     return 'image';
   }
-  function acceptForKind(k){
+  function acceptFor(k){
     return k === 'video' ? 'video/*' : (k === 'audio' ? 'audio/*' : 'image/*');
   }
 
-  function applySuccess(box, url, fname){
+  // ============ Apply uploaded URL + preview thumbnail to box ============
+  function clearBox(box){
+    delete box.dataset.url;
+    box.style.borderStyle = '';
+    box.style.borderColor = '';
+    box.style.background = '';
+    const t = box.querySelector('.upload-thumb');
+    if (t) t.remove();
+    const del = box.querySelector('.upload-delete-btn');
+    if (del) del.remove();
     const titleEl = box.querySelector('.label-title');
     const hintEl = box.querySelector('.label-hint');
-    if (titleEl) titleEl.textContent = '✓ 已选：' + (fname || (url.length > 40 ? '…' + url.slice(-38) : url));
-    if (hintEl) hintEl.textContent = url;
-    box.dataset.url = url;
+    const kind = detectKind(box);
+    if (titleEl){
+      titleEl.textContent = kind === 'video' ? '点击或拖入视频' : (kind === 'audio' ? '点击或拖入音频' : '点击或拖入图片');
+    }
+    if (hintEl){
+      hintEl.textContent = kind === 'image' ? 'ImgBB 自动上传 · ≤32MB' : (kind === 'video' ? 'Pixeldrain 自动上传 · ≤1GB' : 'Pixeldrain 自动上传');
+    }
+  }
+
+  async function applyToBox(box, uploadResult, file, kind){
+    const titleEl = box.querySelector('.label-title');
+    const hintEl = box.querySelector('.label-hint');
+    if (titleEl) titleEl.textContent = '✓ ' + (file.name || '已上传');
+    if (hintEl) hintEl.textContent = uploadResult.url;
+    box.dataset.url = uploadResult.url;
     box.style.borderStyle = 'solid';
     box.style.borderColor = '#7c3aed';
     box.style.background = 'rgba(124,58,237,0.06)';
-  }
 
-  function setBusy(box, busy, msg){
-    if (busy){
-      box.style.pointerEvents = 'none';
-      box.style.opacity = '0.7';
-      const titleEl = box.querySelector('.label-title');
-      if (titleEl && msg) titleEl.textContent = msg;
-    } else {
-      box.style.pointerEvents = '';
-      box.style.opacity = '';
-    }
-  }
-
-  async function handleFile(box, file){
-    const kind = detectKind(box);
-    if (kind !== 'image'){
-      // Video/audio not supported yet for ImgBB; show clear message
-      const useUrl = confirm('视频/音频暂不支持 ImgBB 直传（base64 太大）。\n\n确认 → 用 URL paste\n取消 → 放弃');
-      if (useUrl){
-        const url = prompt('粘贴' + (kind === 'video' ? '视频' : '音频') + '公网 URL：');
-        if (url && url.trim()) applySuccess(box, url.trim());
+    // Add delete button (× in top-right corner of box)
+    let delBtn = box.querySelector('.upload-delete-btn');
+    if (!delBtn){
+      delBtn = document.createElement('button');
+      delBtn.className = 'upload-delete-btn';
+      delBtn.type = 'button';
+      delBtn.innerHTML = '✕ 删除';
+      delBtn.style.cssText = 'position:absolute;top:6px;right:6px;padding:3px 8px;font-size:11px;font-weight:500;background:#fff;border:1px solid #ef4444;color:#ef4444;border-radius:6px;cursor:pointer;z-index:5;line-height:1';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (!confirm('删除已上传的素材？')) return;
+        clearBox(box);
+      });
+      // Ensure box is positioned for absolute child
+      if (getComputedStyle(box).position === 'static'){
+        box.style.position = 'relative';
       }
-      return;
+      box.appendChild(delBtn);
     }
-    if (file.size > 32 * 1024 * 1024){
-      alert('文件过大（' + (file.size/1024/1024).toFixed(1) + ' MB），ImgBB 免费档限制 32 MB');
-      return;
+
+    // Inject thumbnail
+    let thumb = box.querySelector('.upload-thumb');
+    if (!thumb){
+      thumb = document.createElement('div');
+      thumb.className = 'upload-thumb';
+      thumb.style.cssText = 'width:64px;height:64px;border-radius:8px;border:1px solid rgba(124,58,237,0.25);background:#fff;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative;margin-right:4px';
+      const svg = box.querySelector(':scope > svg');
+      if (svg) svg.replaceWith(thumb);
+      else box.insertBefore(thumb, box.firstChild);
     }
-    if (!getImgbbKey()){
-      const choice = confirm('未配置 ImgBB Key。\n\n确认 → 去设置面板配 Key\n取消 → 粘 URL 兜底');
-      if (choice){
-        const settings = document.getElementById('settingsPanel');
-        if (settings){
-          settings.classList.remove('hidden');
-          settings.scrollIntoView({ behavior: 'smooth' });
-          const keyInput = document.getElementById('imgbbKey');
-          if (keyInput) setTimeout(() => keyInput.focus(), 400);
+    if (kind === 'image'){
+      // Use local dataURI for instant preview, fallback to imgbb thumb URL
+      try {
+        const local = await fileToDataUri(file);
+        thumb.innerHTML = '<img src="' + local + '" style="width:100%;height:100%;object-fit:cover">';
+      } catch(e){
+        thumb.innerHTML = '<img src="' + (uploadResult.thumb || uploadResult.url) + '" style="width:100%;height:100%;object-fit:cover">';
+      }
+    } else if (kind === 'video'){
+      // Use a small video preview at first frame
+      thumb.innerHTML = '<video src="' + uploadResult.url + '" muted style="width:100%;height:100%;object-fit:cover" preload="metadata"></video>';
+    } else if (kind === 'audio'){
+      thumb.innerHTML = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+    }
+  }
+
+  function showProgress(box, msg){
+    const titleEl = box.querySelector('.label-title');
+    const hintEl = box.querySelector('.label-hint');
+    if (titleEl) titleEl.textContent = '⏳ ' + msg;
+    if (hintEl) hintEl.textContent = '';
+    box.style.pointerEvents = 'none';
+    box.style.opacity = '0.85';
+  }
+  function showError(box, msg){
+    const titleEl = box.querySelector('.label-title');
+    if (titleEl) titleEl.textContent = '✗ ' + msg;
+    box.style.pointerEvents = '';
+    box.style.opacity = '';
+    box.style.borderColor = '#ef4444';
+  }
+
+  // ============ Handle a single file dropped/picked into a box ============
+  async function handleBoxFile(box, file){
+    const kind = detectKind(box);
+    if (kind === 'image' && !getImgKey()){
+      const ok = confirm('未配置 ImgBB Key（图片图床）。\n\n确认 → 去设置面板配 Key\n取消 → 用 URL paste 兜底');
+      if (ok){
+        const s = document.getElementById('settingsPanel');
+        if (s){
+          s.classList.remove('hidden');
+          s.scrollIntoView({ behavior: 'smooth' });
+          const ki = document.getElementById('imgbbKey');
+          if (ki) setTimeout(() => ki.focus(), 400);
         }
       } else {
-        const url = prompt('粘贴图片公网 URL：');
-        if (url && url.trim()) applySuccess(box, url.trim());
+        const u = prompt('粘贴图片公网 URL：');
+        if (u && u.trim()){
+          await applyToBox(box, { url: u.trim() }, { name: u.trim().split('/').pop() }, kind);
+        }
       }
       return;
     }
-    setBusy(box, true, '上传中... ' + file.name);
+    showProgress(box, '上传 ' + (kind === 'image' ? 'ImgBB' : 'Pixeldrain') + '... ' + file.name);
     try {
-      const url = await uploadToImgbb(file, (pct, msg) => {
-        const titleEl = box.querySelector('.label-title');
-        if (titleEl) titleEl.textContent = '⏳ ' + msg + ' (' + pct + '%)';
-      });
-      setBusy(box, false);
-      applySuccess(box, url, file.name);
+      const result = await uploadFile(file, kind);
+      box.style.pointerEvents = '';
+      box.style.opacity = '';
+      await applyToBox(box, result, file, kind);
       if (typeof showToast === 'function') showToast('上传成功 · ' + file.name, 'success');
     } catch(err){
-      setBusy(box, false);
-      const titleEl = box.querySelector('.label-title');
-      if (titleEl) titleEl.textContent = '✗ 上传失败';
-      alert('上传失败：' + err.message);
-      console.error('[ImgBB]', err);
+      console.error('[upload]', err);
+      if (err.message === 'NO_IMGBB_KEY'){
+        showError(box, '请先配 ImgBB Key');
+      } else if (err.message === 'FILE_TOO_LARGE_32MB'){
+        showError(box, 'ImgBB 限制 ≤32MB');
+      } else if (err.message === 'FILE_TOO_LARGE_1GB'){
+        showError(box, 'Pixeldrain 限制 ≤1GB');
+      } else {
+        showError(box, err.message.slice(0, 40));
+      }
+      setTimeout(() => {
+        const titleEl = box.querySelector('.label-title');
+        if (titleEl && !box.dataset.url){
+          titleEl.textContent = '点击或拖入 1 张图';
+          box.style.borderColor = '';
+        }
+      }, 4000);
     }
   }
 
+  // ============ Upgrade ref-uploader-compact boxes ============
   function upgradeBox(box){
-    if (box.dataset.uploadReady) return;
-    box.dataset.uploadReady = '1';
-    const kind = detectKind(box);
+    if (box.dataset.v0173Ready) return;
+    box.dataset.v0173Ready = '1';
 
-    // Clone to nuke any v0.17.1 listeners
     const newBox = box.cloneNode(true);
     box.parentNode.replaceChild(newBox, box);
+    const kind = detectKind(newBox);
 
-    // Hidden file input
     const fi = document.createElement('input');
     fi.type = 'file';
-    fi.accept = acceptForKind(kind);
+    fi.accept = acceptFor(kind);
     fi.style.display = 'none';
     newBox.appendChild(fi);
 
-    // Click to open picker
     newBox.addEventListener('click', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.closest('button')) return;
-      fi.click();
-    });
-    // Also bind "上传" button if present inside the box
-    const upBtn = newBox.querySelector('button');
-    if (upBtn){
-      upBtn.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.target.closest('button') && e.target.closest('button') !== newBox.querySelector('.fallback-url-btn')){
+        // direct upload button — open picker
         e.stopPropagation();
         fi.click();
-      });
-    }
+        return;
+      }
+      fi.click();
+    });
 
-    // File selected from picker
     fi.addEventListener('change', () => {
       const f = fi.files && fi.files[0];
-      if (f) handleFile(newBox, f);
+      if (f) handleBoxFile(newBox, f);
       fi.value = '';
     });
 
-    // Drag-and-drop
     newBox.addEventListener('dragover', (e) => {
       e.preventDefault();
       newBox.style.borderColor = '#7c3aed';
@@ -7304,40 +7473,203 @@ init();
     newBox.addEventListener('drop', (e) => {
       e.preventDefault();
       const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) handleFile(newBox, f);
+      if (f) handleBoxFile(newBox, f);
     });
   }
 
-  function initAll(){
+  function initBoxes(){
     document.querySelectorAll('#viewVideo .ref-uploader-compact').forEach(upgradeBox);
   }
 
-  // ImgBB key field persistence
+  // ============ Asset library: virtual avatar batch upload (file picker) ============
+  function bindAssetUploads(){
+    // 虚拟人像批量上传按钮
+    document.querySelectorAll('#viewVideo button').forEach(b => {
+      if (b.dataset.v0173Bound) return;
+      const txt = (b.textContent || '').trim();
+
+      if (txt.includes('批量上传')){
+        b.dataset.v0173Bound = '1';
+        b.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!state.apiKey){ alert('请先配置 API Key'); return; }
+          if (!getImgKey()){
+            alert('需要先配置 ImgBB Key（在设置里）');
+            return;
+          }
+          // open file picker for multiple images
+          const fi = document.createElement('input');
+          fi.type = 'file';
+          fi.multiple = true;
+          fi.accept = 'image/*';
+          fi.style.display = 'none';
+          document.body.appendChild(fi);
+          fi.click();
+          fi.addEventListener('change', async () => {
+            const files = Array.from(fi.files || []).slice(0, 20);
+            document.body.removeChild(fi);
+            if (!files.length) return;
+            const groupName = prompt('给这批素材起个组名：', 'virtual-avatar-' + Date.now().toString(36).slice(-4));
+            if (!groupName) return;
+            const orig = b.innerHTML;
+            b.disabled = true;
+            // upload all in parallel (max 4 at a time to avoid rate limit)
+            const results = [];
+            for (let i = 0; i < files.length; i += 4){
+              b.innerHTML = '⏳ 上传中 ' + i + '/' + files.length;
+              const batch = files.slice(i, i + 4);
+              const r = await Promise.allSettled(batch.map(f => uploadImage(f)));
+              r.forEach((x, idx) => {
+                if (x.status === 'fulfilled'){
+                  results.push({ url: x.value.url, name: files[i+idx].name.replace(/\.[^.]+$/, '') });
+                } else {
+                  console.warn('[upload skip]', files[i+idx].name, x.reason);
+                }
+              });
+            }
+            if (!results.length){
+              b.innerHTML = orig;
+              b.disabled = false;
+              alert('所有文件上传失败');
+              return;
+            }
+            b.innerHTML = '⏳ 提交审核 ' + results.length + ' 张...';
+            try {
+              const resp = await fetch(state.baseUrl + '/seedance2/private-avatar', {
+                method: 'POST',
+                headers: {
+                  'Authorization': 'Bearer ' + state.apiKey,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  group: { name: groupName, description: 'From AIGC Studio' },
+                  project_name: 'default',
+                  asset_type: 'Image',
+                  assets: results
+                })
+              });
+              const data = await resp.json();
+              if (!resp.ok){
+                alert('审核任务提交失败：' + ((data.error && data.error.message) || JSON.stringify(data).slice(0, 200)));
+              } else {
+                const taskId = (data.data && data.data.id) || '?';
+                alert('✓ 已提交 ' + results.length + ' 张到审核\n任务 ID: ' + taskId + '\n\n(轮询查询审核结果 v0.17.4 实现)');
+              }
+            } catch(err){
+              alert('提交失败：' + err.message);
+            } finally {
+              b.innerHTML = orig;
+              b.disabled = false;
+            }
+          });
+        });
+      }
+
+      // 真人人像步骤 4: 批量上传真人视频
+      if (txt.includes('批量上传真人视频')){
+        b.dataset.v0173Bound = '1';
+        // remove disabled
+        b.disabled = false;
+        b.removeAttribute('aria-disabled');
+        b.style.opacity = '';
+        b.innerHTML = '<svg width="14" height="14"><use href="#i-upload"/></svg> 批量上传真人视频';
+        b.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!state.apiKey){ alert('请先配置 API Key'); return; }
+          const groupId = prompt('粘贴 group_id（从步骤 3 查询认证结果拿到）：');
+          if (!groupId || !groupId.trim()) return;
+          const fi = document.createElement('input');
+          fi.type = 'file';
+          fi.multiple = true;
+          fi.accept = 'video/*';
+          fi.style.display = 'none';
+          document.body.appendChild(fi);
+          fi.click();
+          fi.addEventListener('change', async () => {
+            const files = Array.from(fi.files || []);
+            document.body.removeChild(fi);
+            if (!files.length) return;
+            const orig = b.innerHTML;
+            b.disabled = true;
+            const results = [];
+            for (let i = 0; i < files.length; i++){
+              b.innerHTML = '⏳ 上传 ' + (i+1) + '/' + files.length;
+              try {
+                const r = await uploadVideoOrAudio(files[i]);
+                results.push({ url: r.url, name: files[i].name.replace(/\.[^.]+$/, '') });
+              } catch(err){
+                console.warn('[skip]', files[i].name, err);
+              }
+            }
+            if (!results.length){
+              b.innerHTML = orig;
+              b.disabled = false;
+              alert('所有视频上传失败');
+              return;
+            }
+            b.innerHTML = '⏳ 提交审核...';
+            try {
+              const resp = await fetch(state.baseUrl + '/seedance2/real-avatar', {
+                method: 'POST',
+                headers: {
+                  'Authorization': 'Bearer ' + state.apiKey,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  group_id: groupId.trim(),
+                  project_name: 'default',
+                  asset_type: 'Video',
+                  assets: results
+                })
+              });
+              const data = await resp.json();
+              if (!resp.ok){
+                alert('提交失败：' + ((data.error && data.error.message) || JSON.stringify(data).slice(0, 200)));
+              } else {
+                const taskId = (data.data && data.data.id) || '?';
+                alert('✓ 已提交 ' + results.length + ' 个真人视频审核\n任务 ID: ' + taskId);
+              }
+            } catch(err){
+              alert('提交失败：' + err.message);
+            } finally {
+              b.innerHTML = orig;
+              b.disabled = false;
+            }
+          });
+        });
+      }
+    });
+  }
+
+  // ============ ImgBB key field persistence ============
   function bindKeyField(){
     const k = document.getElementById('imgbbKey');
-    if (!k || k.dataset.bound) return;
-    k.dataset.bound = '1';
-    k.value = getImgbbKey();
-    k.addEventListener('change', () => setImgbbKey(k.value.trim()));
-    k.addEventListener('blur', () => setImgbbKey(k.value.trim()));
+    if (!k || k.dataset.v0173Bound) return;
+    k.dataset.v0173Bound = '1';
+    k.value = getImgKey();
+    k.addEventListener('change', () => setImgKey(k.value.trim()));
+    k.addEventListener('blur', () => setImgKey(k.value.trim()));
+  }
+
+  function initAll(){
+    bindKeyField();
+    initBoxes();
+    bindAssetUploads();
   }
 
   if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(() => { bindKeyField(); initAll(); }, 500);
-    });
+    document.addEventListener('DOMContentLoaded', () => setTimeout(initAll, 500));
   } else {
-    setTimeout(() => { bindKeyField(); initAll(); }, 500);
+    setTimeout(initAll, 500);
   }
-
-  // Re-init when mode tabs clicked (refBlock_* changes visibility, but boxes still exist)
+  // Re-init on tab/mode changes
   document.addEventListener('click', (e) => {
-    if (e.target.closest('.mode-tab[data-mode]') || e.target.closest('.tab-btn[data-tab="video"]')){
+    if (e.target.closest('.mode-tab[data-mode]') || e.target.closest('.tab-btn[data-tab="video"]') || e.target.closest('.mode-tab[data-asset-tab]')){
       setTimeout(initAll, 100);
     }
   });
 
-  console.log('[v0.17.2 hotfix] complete upload module loaded');
+  console.log('[v0.17.3] full upload module loaded · ImgBB + Pixeldrain + asset batch + thumbnails');
 })();
 </script>
 </body>
