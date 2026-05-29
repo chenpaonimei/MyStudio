@@ -7789,6 +7789,30 @@ init();
     } catch(e){ return ''; }
   }
 
+  function isHttpUploadUrl(value){
+    return /^https?:\/\/[^\s<>"']+$/i.test(String(value || '').trim());
+  }
+
+  function looksLikeHtmlResponse(text){
+    return /^\s*(?:<!doctype\s+html|<(?:html|head|body)\b)/i.test(String(text || '').slice(0, 500));
+  }
+
+  function extractUploadUrl(text){
+    const raw = String(text || '').trim();
+    let data = null;
+    let parsedJson = false;
+    try {
+      data = JSON.parse(raw);
+      parsedJson = true;
+    } catch(e){}
+    const candidate = data && (
+      data.url ||
+      (data.data && (data.data.url || data.data.display_url || data.data.download_url)) ||
+      (data.result && data.result.url)
+    );
+    return String(candidate || (parsedJson ? '' : raw)).trim();
+  }
+
   async function uploadViaWorker(file){
     const uploadUrl = getWorkerUploadUrl();
     if (!uploadUrl) throw new Error('NO_WORKER_UPLOAD');
@@ -7797,12 +7821,19 @@ init();
     form.append('file', file, file.name || 'upload.bin');
     const resp = await fetch(uploadUrl, { method: 'POST', body: form });
     const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { url: text.trim() }; }
-    if (!resp.ok || !data.url){
-      throw new Error('Worker upload: ' + ((data.error && data.error.message) || data.message || text.slice(0, 160) || ('HTTP ' + resp.status)));
+    let data = null;
+    try { data = JSON.parse(text); } catch(e){}
+    if (!resp.ok){
+      throw new Error('Worker upload: ' + ((data && data.error && data.error.message) || (data && data.message) || text.slice(0, 160) || ('HTTP ' + resp.status)));
     }
-    return { url: data.url, thumb: null, size: file.size, name: file.name };
+    if (looksLikeHtmlResponse(text)){
+      throw new Error('Worker /upload 未部署，请重部署');
+    }
+    const url = extractUploadUrl(text);
+    if (!isHttpUploadUrl(url)){
+      throw new Error('Worker upload 未返回有效URL');
+    }
+    return { url, thumb: null, size: file.size, name: file.name };
   }
 
   async function uploadVideoOrAudio(file){
@@ -7830,7 +7861,10 @@ init();
     const workerUploadUrl = getWorkerUploadUrl();
     if (workerUploadUrl){
       try { return await uploadViaWorker(file); }
-      catch(err){ console.warn('[worker upload fallback to catbox.moe]', err); }
+      catch(err){
+        if (/\/upload 未部署|未返回有效URL/i.test(err.message || '')) throw err;
+        console.warn('[worker upload fallback to catbox.moe]', err);
+      }
     }
 
     // Default fallback: catbox.moe (free, no key, ≤200 MB)
@@ -7846,7 +7880,10 @@ init();
       throw new Error('Catbox HTTP ' + resp.status);
     }
     const url = (await resp.text()).trim();
-    if (url.indexOf('https://') !== 0){
+    if (looksLikeHtmlResponse(url)){
+      throw new Error('Catbox 返回了网页HTML');
+    }
+    if (!isHttpUploadUrl(url)){
       throw new Error('Catbox 异常返回：' + url.slice(0, 150));
     }
     return { url, thumb: null, size: file.size, name: file.name };
@@ -8024,7 +8061,8 @@ init();
         return;
       }
     }
-    showProgress(box, '上传 ' + (kind === 'image' ? 'ImgBB' : (localStorage.getItem('studio.pixeldrainKey') ? 'Pixeldrain' : 'catbox.moe')) + '... ' + file.name);
+    const uploadLabel = kind === 'image' ? 'ImgBB' : (localStorage.getItem('studio.pixeldrainKey') ? 'Pixeldrain' : (getWorkerUploadUrl() ? 'Worker /upload' : 'catbox.moe'));
+    showProgress(box, '上传 ' + uploadLabel + '... ' + file.name);
     try {
       const result = await uploadFile(file, kind);
       box.style.pointerEvents = '';
@@ -8047,7 +8085,7 @@ init();
       setTimeout(() => {
         const titleEl = box.querySelector('.label-title');
         if (titleEl && !box.dataset.url){
-          titleEl.textContent = '点击或拖入 1 张图';
+          titleEl.textContent = kind === 'video' ? '点击或拖入视频' : (kind === 'audio' ? '点击或拖入音频' : '点击或拖入图片');
           box.style.borderColor = '';
         }
       }, 4000);

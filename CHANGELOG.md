@@ -19,6 +19,7 @@
 - **素材库审核轮询**：虚拟人像批量上传并提交 `/v1/seedance2/private-avatar` 后自动轮询审核任务；解析 `usable_assets` / `assets` / `asset_urls` 等常见返回结构，写入 `localStorage('studio.seedance.assets.v1')` 并渲染素材卡片。
 - **asset 选择 UI**：用素材库模式从 prompt 粘贴升级为下拉选择 + 卡片「选用」按钮；仍保留手动粘贴 `asset_id` / `asset://...` 兜底。
 - **catbox file:// CORS 真修法**：Cloudflare Worker 新增 `/upload` 路由。视频/音频上传会优先走 `{Worker Base URL 去掉 /v1}/upload`，由 Worker 服务器侧转发到 catbox.moe；未部署 Worker 时继续走 Pixeldrain / catbox / URL paste 兜底。
+- **上传结果硬校验 hotfix**：旧 Worker 未重部署时，`/upload` 会被旧代理转发到 APIMart 并返回 HTML 首页；现在前端只接受真正的 `http(s)` URL，遇到 HTML 会明确提示「Worker /upload 未部署，请重部署」，不会再把网页源码塞进参考视频框。
 - **版本同步**：`APP_VERSION` / header / 文档统一到 v0.17.6。
 
 ### 需要用户操作
