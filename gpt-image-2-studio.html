@@ -7813,13 +7813,16 @@ init();
     return String(candidate || (parsedJson ? '' : raw)).trim();
   }
 
-  async function uploadViaWorker(file){
+  async function uploadViaWorker(file, pixeldrainKey){
     const uploadUrl = getWorkerUploadUrl();
     if (!uploadUrl) throw new Error('NO_WORKER_UPLOAD');
-    if (file.size > 200 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_200MB_CATBOX');
+    if (!pixeldrainKey && file.size > 200 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_200MB_CATBOX');
+    if (pixeldrainKey && file.size > 1024 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_1GB');
     const form = new FormData();
     form.append('file', file, file.name || 'upload.bin');
-    const resp = await fetch(uploadUrl, { method: 'POST', body: form });
+    const headers = {};
+    if (pixeldrainKey) headers['X-Pixeldrain-Key'] = pixeldrainKey;
+    const resp = await fetch(uploadUrl, { method: 'POST', headers, body: form });
     const text = await resp.text();
     let data = null;
     try { data = JSON.parse(text); } catch(e){}
@@ -7840,7 +7843,7 @@ init();
     let pdKey = '';
     try { pdKey = localStorage.getItem('studio.pixeldrainKey') || ''; } catch(e){}
 
-    if (pdKey){
+    if (false && pdKey){
       if (file.size > 1024 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_1GB');
       const form = new FormData();
       form.append('file', file);
@@ -7860,14 +7863,17 @@ init();
 
     const workerUploadUrl = getWorkerUploadUrl();
     if (workerUploadUrl){
-      try { return await uploadViaWorker(file); }
+      try { return await uploadViaWorker(file, pdKey); }
       catch(err){
-        if (/\/upload 未部署|未返回有效URL/i.test(err.message || '')) throw err;
-        console.warn('[worker upload fallback to catbox.moe]', err);
+        console.warn('[worker upload failed]', err);
+        throw err;
       }
     }
 
     // Default fallback: catbox.moe (free, no key, ≤200 MB)
+    if (pdKey){
+      throw new Error('Pixeldrain 浏览器直传被 CORS 拦截，请使用 Worker 或粘贴URL');
+    }
     if (file.size > 200 * 1024 * 1024) throw new Error('FILE_TOO_LARGE_200MB_CATBOX');
     const form = new FormData();
     form.append('reqtype', 'fileupload');
@@ -8010,10 +8016,30 @@ init();
   }
   function showError(box, msg){
     const titleEl = box.querySelector('.label-title');
+    const hintEl = box.querySelector('.label-hint');
     if (titleEl) titleEl.textContent = '✗ ' + msg;
+    if (hintEl) hintEl.textContent = msg;
     box.style.pointerEvents = '';
     box.style.opacity = '';
     box.style.borderColor = '#ef4444';
+  }
+
+  async function promptUrlFallback(box, kind, reason){
+    if (kind === 'image') return false;
+    const label = kind === 'video' ? '视频' : '音频';
+    const u = prompt(
+      label + '自动上传失败：\n' + String(reason || '').slice(0, 220) +
+      '\n\n先用最直接方案：把文件传到 Pixeldrain / R2 / 任何公网直链服务，然后把 URL 粘贴在这里：'
+    );
+    if (!u || !u.trim()) return false;
+    const url = u.trim();
+    if (!isHttpUploadUrl(url)){
+      showError(box, '请粘贴 http(s) 公网URL');
+      return false;
+    }
+    await applyToBox(box, { url }, { name: url.split('/').pop() || label + 'URL' }, kind);
+    if (typeof showToast === 'function') showToast('已使用粘贴URL · ' + label, 'success');
+    return true;
   }
 
   // ============ Handle a single file dropped/picked into a box ============
@@ -8080,8 +8106,10 @@ init();
       } else if (err.message === 'FILE_TOO_LARGE_200MB_CATBOX'){
         showError(box, 'catbox 限制 ≤200MB · 配 Pixeldrain key 升 1GB');
       } else {
-        showError(box, err.message.slice(0, 40));
+        showError(box, err.message.slice(0, 120));
       }
+      const pasted = await promptUrlFallback(box, kind, err.message || String(err));
+      if (pasted) return;
       setTimeout(() => {
         const titleEl = box.querySelector('.label-title');
         if (titleEl && !box.dataset.url){
