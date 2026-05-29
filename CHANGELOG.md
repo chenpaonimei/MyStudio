@@ -1,10 +1,189 @@
-# Ling's GPT-Image-2 Studio · 更新日志
+# Ling's AIGC Studio · 更新日志
 
-> 项目：`gpt-image-2-studio.html`（基于 APIMart 网关的 GPT-Image-2 / GPT-Image-2-Official 图像生成工作台）
+> 项目：`gpt-image-2-studio.html`（图像 + 视频 双形态 AIGC 工作台，基于 APIMart 网关）
 >
 > 版本号方案：`主.次.补丁`（语义化），破坏性变更 +主；新功能 +次；修复或小补丁 +补丁。
 >
-> 关联接口文档：[image2-generate-apimart-v5.md](./image2-generate-apimart-v5.md)
+> 关联接口文档：[image2-generate-apimart-v5.md](./image2-generate-apimart-v5.md) · [STUDIO_DEV.md](./STUDIO_DEV.md)（开发交接文档）
+
+---
+
+## v0.17.6 — 2026-05-29 · 视频链路补完：续写 / 真人认证 / 素材入库 / Worker 上传
+
+本版把 v0.17.0-v0.17.5 已经出现在界面和更新日志里的视频链路补成真实行为，避免“按钮在、逻辑空”的半成品状态。
+
+### 修复 / 补完
+
+- **用尾帧续写**：完成任务返回 `last_frame_url` 时，「用尾帧续写」按钮会切到「图生（首帧）」模式，把尾帧写入首帧上传位，并保留原 prompt 作为续写起点。
+- **真人认证步骤 1**：新增「开始认证」按钮，POST `/v1/seedance2/real-avatar` 创建会话；拿到 `task_id` 后轮询 `/v1/tasks/{id}`，提取 `h5_link` / `byted_token`，生成真实 QR 并保存 token，步骤 3 查询可直接复用。
+- **素材库审核轮询**：虚拟人像批量上传并提交 `/v1/seedance2/private-avatar` 后自动轮询审核任务；解析 `usable_assets` / `assets` / `asset_urls` 等常见返回结构，写入 `localStorage('studio.seedance.assets.v1')` 并渲染素材卡片。
+- **asset 选择 UI**：用素材库模式从 prompt 粘贴升级为下拉选择 + 卡片「选用」按钮；仍保留手动粘贴 `asset_id` / `asset://...` 兜底。
+- **catbox file:// CORS 真修法**：Cloudflare Worker 新增 `/upload` 路由。视频/音频上传会优先走 `{Worker Base URL 去掉 /v1}/upload`，由 Worker 服务器侧转发到 catbox.moe；未部署 Worker 时继续走 Pixeldrain / catbox / URL paste 兜底。
+- **版本同步**：`APP_VERSION` / header / 文档统一到 v0.17.6。
+
+### 需要用户操作
+
+如果想让 `file://` 本地双击场景下的视频/音频上传不再被 catbox CORS 拦截，需要按 `WORKER_SETUP.md` 重新部署一次 `apimart-cors-proxy.worker.js`。部署后 Studio 的 Base URL 仍填 `https://你的-worker.workers.dev/v1`，前端会自动把上传发到同域的 `/upload`。
+
+---
+
+## v0.17.5 — 2026-05-29 · 上传识别修复 + asset 模式 picker + file:// CORS 警告 + 开发文档
+
+把 v0.17.1-v0.17.4 累积的 3 个用户反馈一次性收敛。同时产出 `STUDIO_DEV.md` 完整开发文档，让 Codex / 其他 agent 能直接接手。
+
+### 修复
+
+- **多模态混合模式下视频/音频被误识别为图片**：`detectKind` 之前读 `.label-title` 文字判断（"视频"/"音频" 关键字），但多模态模式下文字是「最多 3 段」「最多 9 张」不含关键字。改为读 `box > svg > use` 的 `href` 属性（`#i-image` / `#i-video` / `#i-music`），跨模式可靠。
+- **「用素材库」模式下的「从素材库选」走文件上传**：v0.17.3 给所有 `.ref-uploader-compact` 统一上 file picker，但 asset 模式应该是从已审核素材里**选**而不是上传新文件。新写 `upgradeAssetPicker`：点击 → 弹 prompt 让粘 `asset_id` 或 `asset://` URL → 自动补前缀 → 显示 ✓ + ✕ 删除按钮。下个版本会做下拉选择 UI。
+- **catbox.moe 在 `file://` 协议下 CORS 被拒**：catbox.moe 的 `Access-Control-Allow-Origin` 不接受 null origin（file:// 协议）。现在检测到 `location.protocol === 'file:'` 且没配 Pixeldrain Key 时，弹 confirm 友好解释三条出路：① 配 Pixeldrain API Key 走 Pixeldrain；② 用 `python -m http.server 8000` 起本地 HTTP；③ URL paste 兜底。**注意**：真正干净的修法是让用户在 Cloudflare Worker 加 `/upload` 路由代理，STUDIO_DEV.md 记录了 5 个选项让 Codex 决定。
+
+### 开发文档
+
+新产出 `STUDIO_DEV.md`，给 Codex / 其他 coding agent 接手用。13 个 section 覆盖：
+
+- 项目结构 + 文件层次
+- 主 HTML 按**行号**导航的内容地图（CSS 在哪一行、各 view 在哪一段、JS IIFE 在哪个范围）
+- 版本演进时间线 v0.15.0 → v0.17.5
+- 关键 JS 模块组织 + 30+ 核心函数的行号定位表
+- **5 个已知 bug**：每个写「症状 / 根因 / 修法 / 位置 / 推荐方案」四段
+- 代码风格规范（强调用 Python 脚本字符串替换 + assert anchor）
+- localStorage keys 清单 / API endpoints 清单 / 外部上传服务对比表
+- 17 项行为级测试清单
+- Tailwind / CSS 已知坑（特别是 hotfix6 body 桥接、hotfix8 按钮类规范）
+- 用户口味提醒（反感重复 bug 修不好 / 反感 mock 假装真功能）
+
+文件位置：[STUDIO_DEV.md](./STUDIO_DEV.md)
+
+### 文件统计
+
+- 主 HTML：539 832 → 544 375 字节（+4.5 KB），7 843 → 7 938 行
+- 新增文件：STUDIO_DEV.md（~600 行）
+
+---
+
+## v0.17.4 — 2026-05-29 · AI caret 修复 + 系统提示词模板 + 按钮重设计
+
+针对用户的 5 项反馈一次性收齐。重点是 AI 优化的 caret popover 终于点得开了。
+
+### 修复
+
+- **AI 优化的 ▾ caret 点不开**：之前 `cloneNode` 只换了 button，caret 是兄弟元素，v0.17.0 mock 时代的 click listener 还在。每次点 caret 都触发 v0.17.0 + v0.17.4 两个 toggle，两个 toggle 互相 cancel 导致 popover 不显示。改成 cloneNode 整个 `.ai-split` 父级，一次性清掉所有老 listener，再统一重绑 caret + popover + 模型 item click。
+- **参考视频上传后预览 + 删除按钮缺失**：之前删除按钮放在 `.upload-thumb` 内部，被 `<video>` 元素绝对定位的内置控件遮挡。现在放在 box 右上角（24×24 圆形红 ×），不论 thumb 里是 `<img>` 还是 `<video>` 还是 `<svg>` 音符都不会被挡。
+- **「提交生成」+「从库选」按钮设计崩**：缺 `inline-flex items-center justify-center gap-2`，导致 svg 跟文字垂直堆叠。从库选额外加 `whitespace-nowrap` 避免「从」和「库选」断行。
+- **下载按钮位置/设计差**：之前下载按钮孤零零浮在视频下方，没有 action bar 容器。重做：现在是统一 action bar（带 `border-top` 分隔线），蓝色 primary「下载 mp4」+ 灰色「用尾帧续写」+ 浅色「新标签打开」三按钮并排，右侧显示 task_id（mono 字体）。
+
+### 新功能：AI 优化系统提示词模板编辑
+
+设置面板加 `<details>` 折叠区「AI 优化 prompt 模板（高级）」：
+
+- 图像 + 视频两个独立 textarea，各 6 行
+- 「↺ 恢复默认」按钮一键重置
+- `localStorage('studio.ai.sysImage' / 'studio.ai.sysVideo')` 持久化
+- `callChatCompletions` 优先读自定义，留空走内置默认
+- 内置默认仍是 v0.17.1 的扩写策略（图像 150-400 字 / 视频 200-500 字电影分镜）
+
+用法：去设置 → 滚到底 → 展开模板区 → 改 textarea → 失焦自动存。
+
+---
+
+## v0.17.3 — 2026-05-28 · 完整上传模块（ImgBB + catbox + Pixeldrain + 缩略图 + 素材库）
+
+替换 v0.17.2 部分实现的 URL paste 模式，给上传模块做完整重写。
+
+### 新功能
+
+**图床多源支持**：
+
+| 文件类型 | 主图床 | 备用 | 需 Key | 大小限制 |
+|---|---|---|---|---|
+| 图片 | ImgBB | URL paste | ✅ ImgBB Key | ≤32 MB |
+| 视频 / 音频 | catbox.moe | Pixeldrain（若配 Key） / URL paste | ❌ 默认 / ✅ Pixeldrain Key 可选 | ≤200 MB（catbox）/ ≤1 GB（Pixeldrain） |
+
+**上传交互**：
+
+- 点击上传框任意位置 / 点「上传」按钮 / 拖拽文件 — 三种方式都触发
+- 上传中显示「⏳ 上传 ImgBB...」「⏳ 上传 catbox...」等进度文案
+- 上传成功后 box 内左侧显示 64×64 缩略图：图片用本地 dataURI 即时预览（不等服务器）；视频用 `<video preload="metadata">` 第一帧；音频显示音符 svg 图标
+- 缩略图右上角小红 ✕ 删除按钮（hover 放大 1.15x）
+
+**素材库批量上传**（虚拟人像 + 真人人像）：
+
+- 虚拟人像「批量上传 (≤20)」按钮：弹文件选择器（multiple）→ 选最多 20 张图 → 弹组名 prompt → 并行 ImgBB 上传（每 4 张一批避限流）→ 拿到 URL 列表 → POST `/v1/seedance2/private-avatar` 提交审核
+- 真人认证步骤 4「批量上传真人视频」：弹 `group_id` prompt → 文件选择器（多文件）→ 串行 catbox/Pixeldrain 上传 → POST `/v1/seedance2/real-avatar`
+
+### 修复
+
+- v0.17.1 的 `attachUrlUploaders`（URL paste 老 handler）跟 v0.17.2 的 cloneNode 替换打架，导致点击没反应。彻底注释掉 v0.17.1 的旧 handler，全部用 v0.17.3 的新模块。
+- v0.17.1 的 `bindVirtualAvatarUpload`（旧 URL prompt 模式）early return，让 v0.17.3 的文件选择版本接管。
+
+### v0.17.3 hotfix1（同日）
+
+- **CSP 阻止视频结果加载**：CSP meta 缺 `media-src`，`<video>` 元素加载远端 mp4 被 CSP 用 `default-src 'self'` fallback 拦截。修：加 `media-src 'self' https: blob: data:`；顺便加 `https://fonts.googleapis.com` 到 `style-src`、`https://fonts.gstatic.com` 到 `font-src`，修掉之前控制台一直警告的 Google Fonts 阻塞。
+- **AI 优化 SSE 解析失败**：APIMart 的 chat completions 即使没传 `stream: true` 也返回 SSE 格式（`data: {...}\n` 流式），导致 `resp.json()` 抛 `Unexpected token 'd', "data: {"id"... is not valid JSON`。修：先 `resp.text()` 拿原文，判断开头是不是 `data:` → SSE 模式逐行拼 delta.content；否则走 `JSON.parse`。同时显式带 `stream: false` 在 body 里试图让网关走 JSON。
+- **Pixeldrain 401**：Pixeldrain 现在匿名上传需付费 key 了。改默认走 catbox.moe（免 key、≤200MB、永久），Pixeldrain 改成可选高阶（设置面板加 Pixeldrain API Key 字段，配了就走 Pixeldrain ≤1GB）。
+- **删除按钮设计**：原来是「✕ 删除」红边框白底按钮浮在右上角，太抢眼。改成 18×18 圆形红 ×，hover 放大到 1.15x，无确认弹窗。
+
+### v0.17.3 hotfix2（同日）
+
+- **提交按钮点击无反应**：v0.17.0 hotfix8 把视频区的 `.btn-primary` 改成 Tailwind 类后，v0.17.1 的 `bindSubmitButton` 还在用 `.btn-primary` 选择器找不到按钮。改用文本匹配 `b.textContent.includes('提交生成')`，加 `dataset.submitBound` 防重复绑定。
+- **AI caret popover 在 cloneNode 后失效**：v0.17.1 cloneNode 清掉了 v0.17.0 的 popover 选项 click listener。在 `bindRealEnhance` 内增加 caret + popover + model item 的重绑代码。
+- **上传 box 缺删除功能**：完整版上线（后被 v0.17.4 进一步优化位置）。
+- **提交按钮 / submitVideo 增加详细 console 日志**（`[v0.17.1] submitVideo called` / `payload built` / `submit button clicked`），方便用户反馈时定位。
+
+---
+
+## v0.17.2 — 2026-05-28 · ImgBB 图床集成 + Prompt 灵感库 SVG 截图临摹
+
+### 新功能
+
+- **设置面板新增「图床（ImgBB）」section**：API Key 字段 + 注册链接 + 友好说明。`localStorage('studio.imgbbKey')` 持久化。
+- **上传按钮文件选择器**：点视频区的上传按钮 → 弹原生 file picker → 选图片 → 自动转 base64 → POST 到 `https://api.imgbb.com/1/upload` → 拿真实 URL 存到 `box.dataset.url`。没配 key 时降级到 URL paste prompt。
+- **Prompt 灵感库 SVG 视觉临摹**：之前两张大卡只有单色 SVG 图标 + 渐变背景。换上对应站点的 SVG 视觉临摹 — youmind 用彩虹渐变 + 大字「SEEDANCE 2.0」+ 黑框白底「提示词」标签；atlascloud 用纯黑底 + 三角 logo + 渐变星标 + 大字 + 底部分类 chip 模拟条。识别度大幅提升。
+
+### v0.17.2 hotfix（同日）
+
+- v0.17.1 的 URL paste handler 跟新文件选择器打架。彻底删 v0.17.1 旧逻辑，新写完整模块：① 点击文件选择器；② 拖拽文件；③ ImgBB 上传；④ 上传中状态显示；⑤ 失败 4 秒后自动复位。
+- 之前缺**拖拽**功能完全没实现，hotfix 补上。
+
+---
+
+## v0.17.1 — 2026-05-27 · 真 API 接通：AI 优化 + 视频提交 + 任务轮询
+
+替换 v0.17.0 的所有 mock，接通真 APIMart endpoints。
+
+### 真 API 集成
+
+- **AI 优化 prompt**：POST `/v1/chat/completions` · OpenAI 兼容协议 · 3 个模型（gpt-4o-mini 默认 / claude-3-5-sonnet / gpt-4o）· 各自 system prompt 针对 GPT-Image-2 vs Seedance 2.0 调优。
+- **视频任务提交**：POST `/v1/videos/generations` · 表单读字段 → 按互斥规则组 body → 拿 task_id。
+- **视频任务轮询**：GET `/v1/tasks/{id}?language=zh` · 提交后 3s 起轮，处理中 5s，未知状态 8s，网络错误 10s 退避。
+- **本地价格预估**：4 模型 × 3 分辨率 heuristic 价表，改字段实时刷新。
+- **虚拟人像批量提交**：POST `/v1/seedance2/private-avatar` · 弹 URL 列表 prompt + 组名（v0.17.3 换成文件选择器）。
+- **真人认证步骤 2 查询**：POST `/v1/seedance2/real-avatar` · 粘 byted_token → 返回 group_id。
+
+### 任务卡渲染
+
+- 动态生成 `<article class="solid-card task-card">` DOM
+- 状态徽章：提交中 / 已提交 / 处理中 / 已完成 / 失败 / 已取消
+- 完成后 `<video>` 内嵌播放器 + 下载 mp4 按钮 + 续写按钮（条件显示）
+- 失败时 banner 显示错误信息
+
+### 视频区布局重构
+
+- tab nav 改成 inline 横排：图像 / 视频 是主 tab，Mask + Prompt 库是图像的 sub-tab，Prompt 灵感库是视频的 sub-tab
+- 视频 tab 内的 main-grid 跟图像 tab 用同款 Tailwind `lg:grid-cols-12 lg:col-span-5/7`，视觉一致
+
+### v0.17.1 hotfix（v0.17.0 → v0.17.1 期间多次小修）
+
+| hotfix | 修了什么 |
+|---|---|
+| 1 | sub-tab 点击时丢 group 上下文 → 用 `closest('.sub-tabs-inline')` 反推父级 |
+| 2 | 补 `.main-grid` CSS（合并漏带），清 demo 测试数据（4 mock task / 4 mock asset / prompt 默认值） |
+| 3 | 浅色 solid-card 边框 / 阴影增强 |
+| 4 | violet 染色边框 + 4 层阴影 |
+| 5 | 用 `#viewVideo` 高特异性选择器强制覆盖 |
+| 6 | **真正根因**：v0.16.0 的桥接 `.bg-slate-50,.bg-white{...!important}` 把 body bg 强制成白色（body 用 bg-slate-50 类），白底白卡看不出边。拆开两条规则：bg-slate-50 → `var(--bg-deep)` lavender，bg-white → `var(--bg-elevated)` white |
+| 7 | 任务队列 section 没 col-span（默认占 1/12 列宽 ~133px 导致"视频任务队列"被压成竖排），Prompt 灵感库错挂 col-span，JS 任务卡模板里的 col-span 都修了 |
+| 8 | 视频区表单元素改用图像区同款 Tailwind utility 类（textarea / select / input / button） |
 
 ---
 
