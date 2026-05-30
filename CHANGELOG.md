@@ -8,6 +8,26 @@
 
 ---
 
+## v0.17.7 — 2026-05-29 · 本次素材 @ 引用 + 视频首帧预览 + Pixeldrain 清理
+
+本版不改已经跑通的视频上传链路，只在上传成功后的展示、引用和清理层补完整产品能力。
+
+### 新增 / 修复
+
+- **参考视频首帧预览**：视频上传成功后先用本地文件生成首帧缩略图，再写入上传框和本次素材列表；不依赖 Pixeldrain 远端视频控件加载首帧。
+- **Prompt `@本次素材`**：本次会话里上传或粘贴的图片 / 视频 / 音频会出现在 Prompt 下方，可点击插入，也可输入 `@` 唤起选择菜单。
+- **提交时自动带素材 URL**：提交视频任务前解析 Prompt 里的 `@素材名`，自动合并到 `image_urls` / `video_urls` / `audio_urls`，且避免重复 URL。
+- **会话隔离**：`@本次素材` 只存在内存中，不写 localStorage；刷新页面后和当前任务列表一样清空，不污染不同会话。
+- **Pixeldrain 手动清理**：新增「清理Pixeldrain」按钮，调用 Worker `DELETE /upload?provider=pixeldrain&id=...` 删除本次 Pixeldrain 上传文件；不会在刷新时自动删，避免任务还没读取素材就失效。
+- **Worker 精简版同步**：`apimart-cors-proxy.worker.min.js` 保持 98 行，包含 Pixeldrain 上传 + 删除，适合直接粘贴到 Cloudflare 编辑器。
+- **版本同步**：`APP_VERSION` / header / 文档统一到 v0.17.7。
+
+### 需要用户操作
+
+如果要使用 Pixeldrain 手动清理，需要重新部署 Worker。推荐继续粘贴 `apimart-cors-proxy.worker.min.js`，部署后 Studio 的 Base URL 仍填 `https://你的-worker.workers.dev/v1`。
+
+---
+
 ## v0.17.6 — 2026-05-29 · 视频链路补完：续写 / 真人认证 / 素材入库 / Worker 上传
 
 本版把 v0.17.0-v0.17.5 已经出现在界面和更新日志里的视频链路补成真实行为，避免“按钮在、逻辑空”的半成品状态。
@@ -20,6 +40,7 @@
 - **asset 选择 UI**：用素材库模式从 prompt 粘贴升级为下拉选择 + 卡片「选用」按钮；仍保留手动粘贴 `asset_id` / `asset://...` 兜底。
 - **catbox file:// CORS 真修法**：Cloudflare Worker 新增 `/upload` 路由。视频/音频上传会优先走 `{Worker Base URL 去掉 /v1}/upload`，由 Worker 服务器侧转发到 catbox.moe；未部署 Worker 时继续走 Pixeldrain / catbox / URL paste 兜底。
 - **上传结果硬校验 hotfix**：旧 Worker 未重部署时，`/upload` 会被旧代理转发到 APIMart 并返回 HTML 首页；现在前端只接受真正的 `http(s)` URL，遇到 HTML 会明确提示「Worker /upload 未部署，请重部署」，不会再把网页源码塞进参考视频框。
+- **Worker 上传备用源 hotfix**：catbox.moe 返回 `522` 时，Worker 会继续尝试 `0x0.st`；前端不再从 GitHub Pages 直连 catbox，避免追加一个必然失败的 CORS 报错。
 - **版本同步**：`APP_VERSION` / header / 文档统一到 v0.17.6。
 
 ### 需要用户操作
