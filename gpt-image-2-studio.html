@@ -2294,7 +2294,8 @@ const APP_CHANGELOG = [
       '上传或粘贴的图片 / 视频 / 音频会进入「本次素材」，可点击或输入 @ 插入 Prompt。',
       '提交时解析 Prompt 里的 @素材名，自动合并到 image_urls / video_urls / audio_urls。',
       '本次素材只保存在内存，刷新页面即清空，不污染不同会话。',
-      '新增 Pixeldrain 手动清理按钮，通过 Worker DELETE /upload 删除本次 Pixeldrain 文件。'
+      '新增 Pixeldrain 手动清理按钮，通过 Worker DELETE /upload 删除本次 Pixeldrain 文件。',
+      '修复 AI 优化模型选择后按钮仍固定显示 4o-mini 的同步问题。'
     ]
   },
   {
@@ -6520,10 +6521,10 @@ init();
   function syncModel(modelId){
     currentModel = modelId;
     try { localStorage.setItem(STORAGE_KEY, modelId); } catch(e){}
-    document.querySelectorAll('.aiCurrentModel').forEach(el => {
+    document.querySelectorAll('.aiCurrentModel, [data-ai-current-model]').forEach(el => {
       el.textContent = '· ' + MODELS[modelId].label;
     });
-    document.querySelectorAll('[data-ai-popover], #aiPopover').forEach(pop => {
+    document.querySelectorAll('.ai-popover, [data-ai-popover], #aiPopover').forEach(pop => {
       pop.querySelectorAll('.ai-model-item').forEach(item => {
         item.classList.toggle('selected', item.dataset.aiModel === modelId);
       });
@@ -6602,13 +6603,52 @@ init();
 (function v0171(){
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => document.querySelectorAll(s);
+  const AI_MODEL_KEY = 'studio.aiModel';
+  const AI_MODELS = {
+    'gpt-4o-mini':       { label: '4o-mini',    cost: '~$0.0005' },
+    'claude-3-5-sonnet': { label: '3.5 Sonnet', cost: '~$0.01' },
+    'gpt-4o':            { label: '4o',         cost: '~$0.02' }
+  };
+
+  function normalizeAIModel(model){
+    return AI_MODELS[model] ? model : 'gpt-4o-mini';
+  }
+
+  function getAIModelLabel(model){
+    model = normalizeAIModel(model);
+    return AI_MODELS[model].label;
+  }
+
+  function readAIModel(){
+    try { return normalizeAIModel(localStorage.getItem(AI_MODEL_KEY) || 'gpt-4o-mini'); }
+    catch(e){ return 'gpt-4o-mini'; }
+  }
+
+  function syncAIModelUI(model){
+    model = normalizeAIModel(model || readAIModel());
+    document.querySelectorAll('.aiCurrentModel, [data-ai-current-model]').forEach(el => {
+      el.textContent = '· ' + getAIModelLabel(model);
+    });
+    document.querySelectorAll('.ai-popover, [data-ai-popover], #aiPopover').forEach(pop => {
+      pop.querySelectorAll('.ai-model-item[data-ai-model]').forEach(item => {
+        item.classList.toggle('selected', normalizeAIModel(item.dataset.aiModel) === model);
+      });
+    });
+    return model;
+  }
+
+  function setAIModel(model){
+    model = normalizeAIModel(model);
+    try { localStorage.setItem(AI_MODEL_KEY, model); } catch(e){}
+    return syncAIModelUI(model);
+  }
 
   // ============ AI optimize prompt ============
   const AI_SYS_VIDEO = '你是 Doubao Seedance 2.0 视频生成的 prompt 工程专家。把用户的简短视频描述扩写成 200-500 字的专业电影分镜 prompt，要素覆盖：主体（精确到品种/动作/情绪/状态）、镜头（角度/距离/运动/焦距）、光线（方向/色温/强度/质感）、场景（背景/季节/时间/氛围）、风格（电影感参考/胶片质感/色调）、附加（时长/fps/比例）。返回纯文本扩写后的 prompt，不要解释、不要 markdown、不要分段加标题。中文输出。';
   const AI_SYS_IMAGE = '你是 GPT-Image-2 图像生成的 prompt 工程专家。把用户的简短描述扩写成 150-400 字的专业图像 prompt，覆盖：主体（具体到外观/姿态/表情/服装）、构图（角度/景别/构图法则）、光线（方向/质感/色温）、材质（表面/反射/纹理细节）、风格（艺术参考/年代/媒材）、相机参数（焦距/光圈/快门/景深）。返回纯文本扩写后的 prompt，不要解释、不要 markdown、不要分段加标题。中文输出。';
 
   function getAIModel(){
-    try { return localStorage.getItem('studio.aiModel') || 'gpt-4o-mini'; } catch(e){ return 'gpt-4o-mini'; }
+    return readAIModel();
   }
 
   function getCustomSystemPrompt(isVideo){
@@ -6697,23 +6737,6 @@ init();
     if (split){
       const caret = split.querySelector('.ai-caret');
       const popover = split.querySelector('.ai-popover, [data-ai-popover]');
-      const labelSpan = split.querySelector('.aiCurrentModel');
-      const KEY = 'studio.aiModel';
-      const MODELS = {
-        'gpt-4o-mini':       { label: '4o-mini',    cost: '~$0.0005' },
-        'claude-3-5-sonnet': { label: '3.5 Sonnet', cost: '~$0.01' },
-        'gpt-4o':            { label: '4o',         cost: '~$0.02' }
-      };
-      const currentModel = () => {
-        try { return localStorage.getItem(KEY) || 'gpt-4o-mini'; } catch(e){ return 'gpt-4o-mini'; }
-      };
-      const sync = (m) => {
-        try { localStorage.setItem(KEY, m); } catch(e){}
-        if (labelSpan) labelSpan.textContent = '· ' + (MODELS[m] && MODELS[m].label || m);
-        if (popover) popover.querySelectorAll('.ai-model-item').forEach(it => {
-          it.classList.toggle('selected', it.dataset.aiModel === m);
-        });
-      };
       if (caret && popover){
         caret.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -6723,12 +6746,12 @@ init();
         popover.querySelectorAll('.ai-model-item').forEach(item => {
           item.addEventListener('click', (e) => {
             e.stopPropagation();
-            sync(item.dataset.aiModel);
+            setAIModel(item.dataset.aiModel);
             popover.classList.remove('open');
           });
         });
       }
-      sync(currentModel());
+      syncAIModelUI(readAIModel());
     }
 
     newBtn.addEventListener('click', async (e) => {
@@ -6745,7 +6768,8 @@ init();
       newBtn.disabled = true;
       const orig = newBtn.innerHTML;
       const model = getAIModel();
-      newBtn.innerHTML = '<svg class="spin"><use href="#i-loader"/></svg> 优化中... <span style="font-size:10px;opacity:0.85">· ' + model + '</span>';
+      syncAIModelUI(model);
+      newBtn.innerHTML = '<svg class="spin"><use href="#i-loader"/></svg> 优化中... <span style="font-size:10px;opacity:0.85">· ' + getAIModelLabel(model) + '</span>';
 
       try {
         const customSys = getCustomSystemPrompt(isVideo);

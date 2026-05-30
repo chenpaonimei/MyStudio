@@ -19,6 +19,7 @@
 - **提交时自动带素材 URL**：提交视频任务前解析 Prompt 里的 `@素材名`，自动合并到 `image_urls` / `video_urls` / `audio_urls`，且避免重复 URL。
 - **会话隔离**：`@本次素材` 只存在内存中，不写 localStorage；刷新页面后和当前任务列表一样清空，不污染不同会话。
 - **Pixeldrain 手动清理**：新增「清理Pixeldrain」按钮，调用 Worker `DELETE /upload?provider=pixeldrain&id=...` 删除本次 Pixeldrain 上传文件；不会在刷新时自动删，避免任务还没读取素材就失效。
+- **AI 优化模型显示同步 hotfix**：修复选择 Claude 3.5 Sonnet / GPT-4o 后，按钮仍固定显示 `4o-mini` 的问题；现在图片和视频两个 AI 优化按钮都会跟随 `studio.aiModel` 实时更新。
 - **Worker 精简版同步**：`apimart-cors-proxy.worker.min.js` 保持 98 行，包含 Pixeldrain 上传 + 删除，适合直接粘贴到 Cloudflare 编辑器。
 - **版本同步**：`APP_VERSION` / header / 文档统一到 v0.17.7。
 
